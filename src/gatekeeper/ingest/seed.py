@@ -8,11 +8,13 @@ only by clearance and groups. That makes failures diagnosable.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from gatekeeper.core.db import admin_session
-from gatekeeper.core.models import PrincipalRow, Tenant
+from gatekeeper.core.models import Policy, PrincipalRow, Tenant
 from gatekeeper.core.principal import Clearance, Principal
 
 TENANT_SLUG = "acme-corp"
@@ -28,6 +30,7 @@ CAST: tuple[dict[str, object], ...] = (
         "department": None,
         "region": None,
         "employment_type": "external",
+        "need_to_know": [],
     },
     {
         "external_id": "raj",
@@ -38,6 +41,7 @@ CAST: tuple[dict[str, object], ...] = (
         "department": "engineering",
         "region": "IN",
         "employment_type": "employee",
+        "need_to_know": ["pii"],
     },
     {
         "external_id": "sam",
@@ -48,6 +52,7 @@ CAST: tuple[dict[str, object], ...] = (
         "department": "security",
         "region": "US",
         "employment_type": "employee",
+        "need_to_know": ["security"],
     },
     {
         "external_id": "dana",
@@ -58,6 +63,9 @@ CAST: tuple[dict[str, object], ...] = (
         "department": "people-ops",
         "region": "NL",
         "employment_type": "employee",
+        # `global` waives jurisdiction scoping: People Ops must be able to read every
+        # entity's employment policy, not only the one they happen to sit in.
+        "need_to_know": ["pii", "employment", "benefits", "global"],
     },
     {
         "external_id": "mira",
@@ -68,6 +76,65 @@ CAST: tuple[dict[str, object], ...] = (
         "department": "finance",
         "region": "US",
         "employment_type": "employee",
+        "need_to_know": [
+            "compensation",
+            "pii",
+            "financial",
+            "board",
+            "strategy",
+            "benefits",
+            "global",
+        ],
+    },
+    {
+        "external_id": "pilar",
+        "email": "pilar@contractor.example",
+        "display_name": "Pilar Rus — Contract Engineer",
+        "groups": ["all-employees", "engineering"],
+        "clearance": Clearance.EMPLOYEE,
+        "department": "engineering",
+        "region": "ES",
+        # Holds the pii grant, and is otherwise identical to Raj. That combination is
+        # deliberate: without the grant she would be stopped by need-to-know before the
+        # deny rule was ever consulted, and the rule would demonstrate nothing. With it,
+        # every allow condition is satisfied and only `contractors-no-personal-data`
+        # explains why she sees less than Raj.
+        "employment_type": "contractor",
+        "need_to_know": ["pii"],
+    },
+    {
+        "external_id": "wren",
+        "email": "wren@auditor.example",
+        "display_name": "Wren Adeyemi — External Auditor (grant lapsed)",
+        "groups": ["all-employees", "finance", "audit"],
+        "clearance": Clearance.MANAGER,
+        "department": "finance",
+        "region": "US",
+        "employment_type": "contractor",
+        "need_to_know": ["financial"],
+        # Deliberately in the past. Everything else about this principal says "allowed".
+        "valid_until": datetime.now(UTC) - timedelta(days=3),
+    },
+)
+
+# Deny rules, stored as data in the `policies` table rather than compiled into SQL.
+# `gatekeeper.denied_tags()` collapses them into one tag set per statement.
+DENY_POLICIES: tuple[dict[str, object], ...] = (
+    {
+        "name": "contractors-no-personal-data",
+        "description": "Contractors may not read anything tagged pii, whatever else grants it.",
+        "predicate": {"resource_tags_any": ["pii"], "employment_type_in": ["contractor"]},
+        "priority": 10,
+    },
+    {
+        "name": "litigation-hold-legal",
+        "description": (
+            "Active hold: legal material is restricted to the legal team, overriding the "
+            "standing executive grant. Demonstrates deny beating allow for a principal "
+            "who would otherwise pass every check."
+        ),
+        "predicate": {"resource_tags_any": ["legal"], "unless_groups_any": ["legal"]},
+        "priority": 5,
     },
 )
 
@@ -93,6 +160,16 @@ async def seed_tenant_and_principals() -> tuple[int, int]:
                         for k in values
                         if k not in ("tenant_id", "external_id")
                     },
+                )
+            )
+
+        for rule in DENY_POLICIES:
+            values = {**rule, "tenant_id": tenant_id, "effect": "deny", "enabled": True}
+            dstmt = insert(Policy).values(**values)
+            await session.execute(
+                dstmt.on_conflict_do_update(
+                    constraint="uq_policy_name",
+                    set_={k: dstmt.excluded[k] for k in values if k not in ("tenant_id", "name")},
                 )
             )
     return 1, len(CAST)
@@ -122,5 +199,6 @@ async def load_principal(external_id: str, tenant_slug: str = TENANT_SLUG) -> Pr
             department=row.department,
             region=row.region,
             employment_type=row.employment_type,
+            need_to_know=list(row.need_to_know),
             valid_until=row.valid_until,
         )

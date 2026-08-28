@@ -233,6 +233,16 @@ def index_repair(
     console.print(table)
 
 
+@index_app.command("reacl")
+def index_reacl() -> None:
+    """Re-apply corpus/acl_rules.yaml to existing chunks without re-embedding."""
+    stats = _run(pipeline.reapply_acls(seed.TENANT_SLUG))
+    table = Table(title="ACL reapply", title_justify="left", show_header=False)
+    for label, value in stats.items():
+        table.add_row(label, f"{value:,}")
+    console.print(table)
+
+
 @index_app.command("stats")
 def index_stats() -> None:
     """Chunk counts per embedding space, and how much of the corpus is indexed."""
@@ -259,6 +269,141 @@ def index_stats() -> None:
     for model, chunks, documents in rows:
         table.add_row(model, f"{chunks:,}", f"{documents:,}", f"{documents / total:.0%}")
     console.print(table)
+
+
+@app.command("bench")
+def bench(
+    k: int = 10,
+    backend: str = "",
+    out: Annotated[str, typer.Option(help="write the markdown report here")] = "docs/BENCHMARKS.md",
+) -> None:
+    """Measure what row-level security costs approximate nearest-neighbour search."""
+    from pathlib import Path
+
+    from gatekeeper.evals import filtered_ann
+
+    settings = get_settings()
+    embedder = build_embedder(backend or settings.embedding_backend, settings.openai_api_key)
+
+    async def go() -> tuple[list[filtered_ann.Measurement], int]:
+        async with admin_session() as session:
+            corpus = (await session.execute(select(func.count(Chunk.id)))).scalar_one()
+        principals = {
+            str(m["external_id"]): await seed.load_principal(str(m["external_id"]))
+            for m in seed.CAST
+        }
+        return await filtered_ann.run(principals, embedder, corpus, k=k), corpus
+
+    results, corpus = _run(go())
+
+    table = Table(title=f"Filtered-ANN recall@{k}", title_justify="left")
+    for col in (
+        "principal",
+        "selectivity",
+        "iterative_scan",
+        "ef",
+        f"recall@{k}",
+        "short",
+        "p50",
+        "exact p50",
+    ):
+        table.add_column(col, justify="left" if col in ("principal", "iterative_scan") else "right")
+    for m in results:
+        recall = (
+            f"[green]{m.recall:.3f}[/green]"
+            if m.recall >= 0.99
+            else f"[yellow]{m.recall:.3f}[/yellow]"
+            if m.recall >= 0.9
+            else f"[red]{m.recall:.3f}[/red]"
+        )
+        table.add_row(
+            m.principal,
+            f"{m.selectivity:.1%}",
+            m.scan_mode,
+            str(m.ef_search),
+            recall,
+            str(m.short_returns),
+            f"{m.p50_ms:.0f} ms",
+            f"{m.exact_p50_ms:.0f} ms",
+        )
+    console.print(table)
+
+    path = Path(out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(filtered_ann.to_markdown(results, k, corpus))
+    console.print(f"\n[dim]written to {path}[/dim]")
+
+
+@app.command("redteam")
+def redteam(
+    quick: Annotated[
+        bool, typer.Option(help="sample the corpus instead of running it all")
+    ] = False,
+    k: int = 10,
+    backend: str = "",
+) -> None:
+    """Run the adversarial corpus and score it against an independent oracle.
+
+    Exits non-zero on any leak or reconciliation mismatch, so CI can gate on it.
+    """
+    from gatekeeper.redteam import runner
+
+    settings = get_settings()
+    embedder = build_embedder(backend or settings.embedding_backend, settings.openai_api_key)
+    report = _run(runner.run(embedder, k=k, quick=quick))
+
+    summary = Table(title="Red team", title_justify="left", show_header=False)
+    summary.add_row("retrieval probes", f"{report.probes:,}")
+    summary.add_row("direct-fetch probes", f"{report.fetch_probes:,}")
+    summary.add_row("aggregate / boundary probes", f"{report.aggregate_probes:,}")
+    summary.add_row("(principal, chunk) pairs reconciled", f"{report.reconciled_pairs:,}")
+    summary.add_row(
+        "leaks",
+        f"[green]{len(report.leaks)}[/green]"
+        if not report.leaks
+        else f"[bold red]{len(report.leaks)}[/bold red]",
+    )
+    summary.add_row("leak rate", f"{report.leak_rate:.2%}")
+    withheld = f"{report.overblocks}/{report.entitled_opportunities} entitled results withheld"
+    summary.add_row("over-block rate", f"{report.overblock_rate:.2%} [dim]({withheld})[/dim]")
+    console.print(summary)
+
+    if report.reconciliation_mismatches:
+        console.print("\n[bold red]Oracle disagrees with the database:[/bold red]")
+        for line in report.reconciliation_mismatches:
+            console.print(f"  {line}")
+
+    if report.leaks:
+        console.print("\n[bold red]Leaks:[/bold red]")
+        for leak in report.leaks[:20]:
+            console.print(f"  [{leak.kind}/{leak.category}] {leak.attacker} → {leak.path}")
+            console.print(f"    [dim]{leak.reason}[/dim]")
+        if len(report.leaks) > 20:
+            console.print(f"  [dim]… and {len(report.leaks) - 20} more[/dim]")
+
+    if not report.passed:
+        raise typer.Exit(1)
+    console.print("\n[green]No leaks. Database and oracle agree on every pair.[/green]")
+
+
+@app.command("audit")
+def audit_verify() -> None:
+    """Verify the tamper-evidence of the audit chain."""
+    from gatekeeper.core.audit import ChainBreakError, verify_chain
+
+    async def go() -> tuple[int, str | None]:
+        principal = await seed.load_principal("mira")
+        async with admin_session() as session:
+            try:
+                return await verify_chain(session, principal.tenant_id), None
+            except ChainBreakError as exc:
+                return 0, str(exc)
+
+    verified, error = _run(go())
+    if error:
+        console.print(f"[bold red]{error}[/bold red]")
+        raise typer.Exit(1)
+    console.print(f"[green]audit chain intact[/green] — {verified:,} entries verified")
 
 
 @app.command("serve")

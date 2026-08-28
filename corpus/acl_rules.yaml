@@ -239,3 +239,43 @@ rules:
     sensitivity: public
     min_clearance: 0
     allowed_groups: []
+
+# ---------------------------------------------------------------------------
+# Chunk-level overrides.
+#
+# Document ACLs are coarse: a handbook page about a team is `internal`, but the
+# compensation banding table inside it is not. Overrides match on the chunk's heading
+# path, so the unit of protection is the section an author actually wrote.
+#
+# An override can only make a chunk *stricter*. Clearance and sensitivity take the
+# maximum, tags take the union, and groups take the INTERSECTION with the document's --
+# so a malformed override cannot grant access, only remove it. See `tighten()`.
+#
+# None of these overrides name `allowed_groups`, and that is deliberate. An earlier draft
+# did, and the intersection emptied out on 26 chunks: a compensation section inside an
+# *engineering* document intersects [engineering, all-employees] with the comp groups and
+# leaves nobody. The intersection was right and the rule was wrong. "Must hold the
+# compensation grant" is a need-to-know tag, not a group list; groups answer "may you
+# read this document at all", which the document's own ACL already decided.
+# ---------------------------------------------------------------------------
+chunk_overrides:
+  - name: compensation-sections
+    within: ["handbook/**"]
+    # "equity" needs context: an earlier version matched "Equity not just equality",
+    # a diversity heading, with a pattern meant for stock grants.
+    heading_matches: "compensation|salary|pay band|stock option|bonus|commission|equity (grant|award|refresh|vesting|compensation|plan)"
+    sensitivity: restricted
+    min_clearance: 2
+    need_to_know_tags: [compensation]
+
+  - name: personal-data-sections
+    within: ["handbook/**"]
+    heading_matches: "personal data|gdpr|data subject|background check|right to be forgotten"
+    sensitivity: confidential
+    need_to_know_tags: [pii]
+
+  - name: credentials-and-access
+    within: ["handbook/**"]
+    heading_matches: "credential|secret|access token|api key|break.?glass|privileged access"
+    sensitivity: restricted
+    need_to_know_tags: [security]

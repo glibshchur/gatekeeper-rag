@@ -16,9 +16,11 @@ from uuid import UUID
 from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gatekeeper.config import get_settings
 from gatekeeper.core.db import admin_session
 from gatekeeper.core.models import Chunk, Document, Tenant
 from gatekeeper.ingest import blobs
+from gatekeeper.ingest.acl import AclRuleSet, ResolvedAcl, load_rules
 from gatekeeper.ingest.chunking import chunk_markdown
 from gatekeeper.llm.embeddings import Embedder
 
@@ -32,6 +34,8 @@ class IndexReport:
     documents_skipped: int = 0
     chunks_written: int = 0
     oversized_chunks: int = 0
+    override_chunks: int = 0
+    unreachable_chunks: int = 0
     blobs_written: int = 0
     blob_failures: int = 0
 
@@ -42,6 +46,8 @@ class IndexReport:
             ("documents skipped (unchanged)", f"{self.documents_skipped:,}"),
             ("chunks written", f"{self.chunks_written:,}"),
             ("oversized chunks", f"{self.oversized_chunks:,}"),
+            ("chunks with ACL overrides", f"{self.override_chunks:,}"),
+            ("chunks made unreachable", f"{self.unreachable_chunks:,}"),
             ("blobs written", f"{self.blobs_written:,}"),
             ("blob failures", f"{self.blob_failures:,}"),
         ]
@@ -73,6 +79,7 @@ async def build_index(
         raise ValueError(f"target_tokens={target} exceeds {space.model}'s {space.max_tokens}")
 
     report = IndexReport()
+    rules = load_rules(get_settings().acl_rules_path)
     bucket = blobs.ensure_bucket()
     logger.info(
         "indexing into %s (dim=%d, target=%d tokens, bucket=%s)",
@@ -107,6 +114,7 @@ async def build_index(
                     tenant_slug=tenant_slug,
                     content_root=content_root,
                     embedder=embedder,
+                    rules=rules,
                     target_tokens=target,
                     overlap_tokens=overlap_tokens,
                     force=force,
@@ -133,6 +141,7 @@ async def _index_one(
     tenant_slug: str,
     content_root: Path,
     embedder: Embedder,
+    rules: AclRuleSet,
     target_tokens: int,
     overlap_tokens: int,
     force: bool,
@@ -202,8 +211,22 @@ async def _index_one(
         delete(Chunk).where(Chunk.document_id == document.id, Chunk.embedding_model == space.model)
     )
 
+    # The document's stored ACL is the base every chunk inherits; overrides tighten it
+    # per section. Reconstructed from the row rather than re-resolved from the path so
+    # that what the chunk inherits is provably what the document actually carries.
+    base_acl = ResolvedAcl(
+        sensitivity=document.sensitivity,
+        min_clearance=document.min_clearance,
+        allowed_groups=list(document.allowed_groups),
+        owner_group=document.owner_group,
+        need_to_know_tags=list(document.need_to_know_tags),
+        jurisdiction=list(document.jurisdiction),
+        rule=document.acl_rule or "unknown",
+    )
+
     column = space.column
     for text_chunk, vector in zip(text_chunks, vectors, strict=True):
+        acl = rules.resolve_chunk(base_acl, document.path, text_chunk.heading_path)
         chunk = Chunk(
             tenant_id=document.tenant_id,
             document_id=document.id,
@@ -211,12 +234,13 @@ async def _index_one(
             content=text_chunk.content,
             heading_path=text_chunk.heading_path,
             token_count=text_chunk.token_count,
-            # The effective ACL is copied from the document. Chunk-level overrides land
-            # in Phase 2; until then every chunk is `inherited` and says so.
-            sensitivity=document.sensitivity,
-            allowed_groups=list(document.allowed_groups),
-            min_clearance=document.min_clearance,
-            acl_source="inherited",
+            sensitivity=acl.sensitivity.value,
+            allowed_groups=acl.allowed_groups,
+            min_clearance=int(acl.min_clearance),
+            need_to_know_tags=acl.need_to_know_tags,
+            jurisdiction=acl.jurisdiction,
+            acl_source=acl.source,
+            acl_rule=acl.rule,
             embedding_model=space.model,
         )
         setattr(chunk, column, vector.tolist())
@@ -224,8 +248,73 @@ async def _index_one(
         report.chunks_written += 1
         if text_chunk.oversized:
             report.oversized_chunks += 1
+        if acl.source == "override":
+            report.override_chunks += 1
+            # Group intersection can empty out when an override names groups the
+            # document never granted. The chunk is then readable by nobody, which is
+            # safe but almost certainly a mistake in the rules file -- so it is counted.
+            if not acl.allowed_groups and acl.sensitivity != "public":
+                report.unreachable_chunks += 1
 
     return True
+
+
+async def reapply_acls(tenant_slug: str) -> dict[str, int]:
+    """Recompute every chunk's ACL from the rules file, in place.
+
+    Editing `acl_rules.yaml` changes who may read a chunk; it does not change the chunk's
+    text or its embedding. Re-running the whole pipeline to pick up an access-model edit
+    would re-embed 74,000 chunks to write six columns. This writes the six columns.
+
+    That makes the access model cheap to iterate on, which matters more than it sounds:
+    an authorization rule you can only test by waiting an hour is an authorization rule
+    nobody tests.
+    """
+    rules = load_rules(get_settings().acl_rules_path)
+    stats = {"documents": 0, "chunks": 0, "overrides": 0, "unreachable": 0}
+
+    async with admin_session() as session:
+        tenant_id = (
+            await session.execute(select(Tenant.id).where(Tenant.slug == tenant_slug))
+        ).scalar_one()
+        documents = list(
+            (
+                await session.execute(select(Document).where(Document.tenant_id == tenant_id))
+            ).scalars()
+        )
+
+        for document in documents:
+            stats["documents"] += 1
+            base = ResolvedAcl(
+                sensitivity=document.sensitivity,
+                min_clearance=document.min_clearance,
+                allowed_groups=list(document.allowed_groups),
+                owner_group=document.owner_group,
+                need_to_know_tags=list(document.need_to_know_tags),
+                jurisdiction=list(document.jurisdiction),
+                rule=document.acl_rule or "unknown",
+            )
+            chunks = list(
+                (
+                    await session.execute(select(Chunk).where(Chunk.document_id == document.id))
+                ).scalars()
+            )
+            for chunk in chunks:
+                acl = rules.resolve_chunk(base, document.path, list(chunk.heading_path))
+                chunk.sensitivity = acl.sensitivity.value
+                chunk.allowed_groups = acl.allowed_groups
+                chunk.min_clearance = int(acl.min_clearance)
+                chunk.need_to_know_tags = acl.need_to_know_tags
+                chunk.jurisdiction = acl.jurisdiction
+                chunk.acl_source = acl.source
+                chunk.acl_rule = acl.rule
+                stats["chunks"] += 1
+                if acl.source == "override":
+                    stats["overrides"] += 1
+                    if not acl.allowed_groups and acl.sensitivity != "public":
+                        stats["unreachable"] += 1
+
+    return stats
 
 
 async def documents_needing_rechunk(

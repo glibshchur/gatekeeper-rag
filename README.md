@@ -9,9 +9,31 @@ a compromised API process leaks documents. `gatekeeper-rag` pushes authorization
 Postgres row-level security, so the database itself refuses to return rows the caller is
 not cleared to see — and the query layer connects as a role that *cannot* bypass it.
 
-> **Status: Phase 1 of 6.** The authorization substrate and an end-to-end retrieval
-> pipeline are in place. Hybrid search, reranking, and the evaluation harness land in
-> Phase 3. See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full roadmap.
+> **Status: Phase 2 of 6.** ABAC engine, chunk-level ACLs, tamper-evident audit chain,
+> adversarial test suite, and the filtered-ANN benchmark are in place. Hybrid search,
+> reranking, and the retrieval evaluation harness land in Phase 3. See
+> [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full roadmap.
+
+## Results
+
+| | |
+|---|---|
+| Leaks across 360 adversarial probes + 6 direct-fetch + 8 boundary probes | **0** |
+| (principal, chunk) pairs where the database and an independent oracle disagree | **0 of 442,782** |
+| Over-block rate (entitled results withheld) | **1.15%** |
+| Retrieval latency p50 / p95 | **11 ms / 24 ms** |
+| Recall@10 vs exact brute force, `ef_search=200` | **1.000** |
+
+The authorization numbers come from [`src/gatekeeper/redteam/`](src/gatekeeper/redteam/),
+which scores the SQL policy against a **separate Python implementation of the same written
+spec**. Asking the database whether the database got it right proves nothing; two
+implementations disagreeing loudly is the point. Retrieval numbers are in
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md), measured against exact brute-force ground truth.
+
+**The most useful thing that benchmark found is a problem, not a win:** below roughly 10%
+selectivity the query planner abandons the HNSW index entirely and sequentially scans, so
+the most tightly-scoped users get 79x worse latency — silently, with recall unaffected.
+See [ADR 0006](docs/adr/0006-filtered-ann-and-index-selectivity.md).
 
 ---
 
@@ -76,6 +98,26 @@ asked as Mira Lindqvist — CFO  clearance=3 groups=all-employees, finance, exec
 
 Raj is not filtered out of a list he was shown. The row never leaves Postgres.
 
+## What Phase 2 delivers
+
+- **ABAC engine in one SQL function.** `gatekeeper.authorize()` enforces tenant, expiry,
+  deny rules, clearance, group overlap, need-to-know, and jurisdiction. Both policies call
+  it, so `documents` and `chunks` cannot drift apart.
+- **Need-to-know is subset, not overlap** — a chunk tagged `{pii, compensation}` requires
+  both grants. **Jurisdiction** scopes per-entity employment policy by region.
+  **Deny beats allow**, and deny rules live in a table as data, so a litigation hold is an
+  `INSERT` rather than a deploy.
+- **Chunk-level ACL overrides** that can only *tighten*: clearance and sensitivity take
+  the maximum, tags union, groups intersect. A malformed override cannot grant access.
+- **Hash-chained audit log**, written in the same transaction as the query it describes,
+  append-only from the data plane, with tamper detection tested by editing and deleting
+  rows.
+- **Adversarial suite**: 360 probes across 8 attack categories, plus direct primary-key
+  fetch, aggregate enumeration, forged expired claims, cross-tenant probing, and an
+  exhaustive oracle reconciliation over every (principal, chunk) pair.
+- **Filtered-ANN benchmark** with exact ground truth, and `ef_search` raised to 200
+  because the data said 100 costs up to 20% recall.
+
 ## What Phase 1 delivers
 
 - **Structure-aware Markdown chunking**: heading hierarchy preserved and prefixed onto
@@ -134,8 +176,8 @@ src/gatekeeper/
 ├─ ingest/      ACL derivation, chunking, blobs, pipeline
 ├─ retrieval/   dense search · hybrid, rerank, planning (Phase 3–4)
 ├─ llm/         embeddings, generation, provider abstraction
-├─ evals/       harness, metrics, regression gates      (Phase 3)
-├─ redteam/     exfiltration + injection attack suite   (Phase 2–4)
+├─ evals/       filtered-ANN benchmark · retrieval harness (Phase 3)
+├─ redteam/     independent oracle + adversarial corpus
 └─ apps/        api · worker · mcp                      (Phase 4–5)
 ```
 

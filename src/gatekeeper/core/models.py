@@ -76,6 +76,7 @@ class PrincipalRow(Base):
     department: Mapped[str | None] = mapped_column(Text)
     region: Mapped[str | None] = mapped_column(Text)
     employment_type: Mapped[str] = mapped_column(Text, nullable=False, default="employee")
+    need_to_know: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _now()
 
@@ -149,7 +150,10 @@ class Chunk(Base):
     sensitivity: Mapped[str] = mapped_column(Text, nullable=False, default="internal")
     allowed_groups: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     min_clearance: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    need_to_know_tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    jurisdiction: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     acl_source: Mapped[str] = mapped_column(Text, nullable=False, default="inherited")
+    acl_rule: Mapped[str | None] = mapped_column(Text)
 
     # One column per embedding space. The dimension is part of the column type, so a
     # single nullable column cannot serve two models -- and Phase 3's ablation needs both

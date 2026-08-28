@@ -47,6 +47,10 @@ class Principal(BaseModel):
     department: str | None = None
     region: str | None = None
     employment_type: str = "employee"
+    # Need-to-know grants. A resource tagged `compensation` requires the principal to
+    # hold `compensation`; the check is subset, not overlap, so a document tagged
+    # {pii, compensation} needs both. `global` waives jurisdiction scoping.
+    need_to_know: list[str] = Field(default_factory=list)
     valid_until: datetime | None = None
 
     @property
@@ -61,6 +65,14 @@ class Principal(BaseModel):
         Only attributes the database policies actually consult are included. Keeping
         this payload minimal is deliberate: it is the authorization contract between
         the application and the database, and it should be auditable at a glance.
+
+        Phase 0 shipped six fields because six were enforced. Phase 2 adds
+        ``employment_type``, ``need_to_know`` and ``exp`` because the ABAC engine now
+        consults all three -- a claim appears here when a policy reads it, never before.
+
+        ``exp`` is belt and braces. This method already refuses to serialise an expired
+        grant, but the database re-checks: an application that caches claims, or a bug
+        that reuses a Principal built minutes ago, must not outlive the grant.
         """
         if self.is_expired:
             raise PermissionError(f"principal {self.external_id} expired at {self.valid_until}")
@@ -72,6 +84,9 @@ class Principal(BaseModel):
                 "clearance": int(self.clearance),
                 "department": self.department,
                 "region": self.region,
+                "employment_type": self.employment_type,
+                "need_to_know": sorted(self.need_to_know),
+                "exp": self.valid_until.isoformat() if self.valid_until else None,
             },
             separators=(",", ":"),
             sort_keys=True,

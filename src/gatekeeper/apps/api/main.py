@@ -91,6 +91,10 @@ async def surface(handle: str) -> dict[str, Any]:
         principal = await seed.load_principal(handle)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
+    if principal.is_expired:
+        # Refusing is correct; a 500 is not. The console renders this as a message so an
+        # expired grant reads as an access decision rather than a broken page.
+        raise HTTPException(403, f"grant expired at {principal.valid_until:%Y-%m-%d}")
 
     async with principal_session(principal) as session:
         documents = (await session.execute(select(func.count(Document.id)))).scalar_one()
@@ -128,6 +132,22 @@ async def ask(request: AskRequest) -> dict[str, Any]:
             principal = await seed.load_principal(handle)
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
+
+        if principal.is_expired:
+            results.append(
+                {
+                    "handle": handle,
+                    "display_name": principal.display_name,
+                    "clearance": int(principal.clearance),
+                    "groups": principal.groups,
+                    "latency_ms": 0,
+                    "withheld": None,
+                    "expired": f"grant expired {principal.valid_until:%Y-%m-%d}",
+                    "answer": None,
+                    "sources": [],
+                }
+            )
+            continue
 
         found = await search(
             principal, request.question, embedder(), k=request.k, count_withheld=True

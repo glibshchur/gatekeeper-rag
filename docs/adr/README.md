@@ -14,3 +14,5 @@ useful than the reasoning that turned out to be right.
 | [0002](0002-row-level-security-over-application-filtering.md) | Authorization lives in row-level security | Accepted |
 | [0003](0003-abac-over-rbac.md) | Attribute-based access control, not role-based | Accepted |
 | [0004](0004-embedding-columns-on-chunks.md) | Embeddings are columns on `chunks`, one per vector space | Accepted |
+| [0005](0005-one-decision-function-and-deny-as-data.md) | One decision function; deny rules as data | Accepted |
+| [0006](0006-filtered-ann-and-index-selectivity.md) | Filtered ANN: the access predicate can cost you the vector index | Accepted |

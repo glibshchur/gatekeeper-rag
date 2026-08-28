@@ -196,7 +196,7 @@ function selected() {
 }
 
 function renderSources(sources) {
-  if (!sources.length) return `<div class="empty">No accessible sources matched this question.</div>`;
+  if (!sources.length) return `<div class="empty">No accessible sources.</div>`;
   return `<ol class="src">` + sources.map((s, i) => `
     <li>
       <details>
@@ -230,9 +230,11 @@ function render(data) {
     <div class="col">
       <h3>${esc(r.display_name)}</h3>
       <div class="sub">clearance ${r.clearance} · ${esc(r.groups.join(", ") || "no groups")} · ${r.latency_ms} ms</div>
-      <div class="withheld${r.withheld ? "" : " none"}">
-        ${r.withheld ? `${r.withheld} withheld by authorization` : "nothing withheld"}
-      </div>
+      ${r.expired
+        ? `<div class="withheld">${esc(r.expired)} — no claims issued</div>`
+        : `<div class="withheld${r.withheld ? "" : " none"}">
+             ${r.withheld ? `${r.withheld} withheld by authorization` : "nothing withheld"}
+           </div>`}
       ${data.results.length > 1 && r.sources.length
         ? `<div class="sub">${exclusiveCount(r)} of ${r.sources.length} sources unavailable to the other selected principal(s)</div>`
         : ""}

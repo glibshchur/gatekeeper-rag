@@ -19,6 +19,7 @@ from uuid import UUID
 
 from sqlalchemy import select, text
 
+from gatekeeper.core import audit as audit_log
 from gatekeeper.core.db import admin_session, principal_session
 from gatekeeper.core.models import Chunk, Document
 
@@ -27,6 +28,12 @@ if TYPE_CHECKING:
 
     from gatekeeper.core.principal import Principal
     from gatekeeper.llm.embeddings import Embedder
+
+
+# Chosen from docs/BENCHMARKS.md rather than by feel: recall@10 against exact ground
+# truth is 0.79-0.98 at ef_search 40-100 and 1.000 at 200, for about 1 ms more. Below
+# 200 the results look complete and are quietly missing near neighbours.
+DEFAULT_EF_SEARCH = 200
 
 
 @dataclass
@@ -119,28 +126,55 @@ async def _ann_query(
     ]
 
 
+async def unfiltered_candidates(
+    principal: Principal,
+    query: str,
+    embedder: Embedder,
+    *,
+    k: int = 10,
+    ef_search: int = DEFAULT_EF_SEARCH,
+) -> list[RetrievedChunk]:
+    """The top-k the ranking would return with authorization switched off, within the
+    principal's tenant. Used to separate "authorization removed it" from "it ranked
+    poorly" -- a distinction the over-block metric is meaningless without."""
+    vector = embedder.encode_query(query).tolist()
+    async with admin_session() as session:
+        return await _ann_query(
+            session,
+            embedder=embedder,
+            query_vector=vector,
+            k=k,
+            ef_search=ef_search,
+            tenant_id=principal.tenant_id,
+        )
+
+
 async def search(
     principal: Principal,
     query: str,
     embedder: Embedder,
     *,
     k: int = 10,
-    ef_search: int = 100,
+    ef_search: int = DEFAULT_EF_SEARCH,
     count_withheld: bool = False,
+    audit: bool = True,
 ) -> SearchResult:
+    """Retrieve as `principal`, recording the decision in the audit chain.
+
+    Auditing defaults on. A system whose claim is "the database decides who sees what"
+    should be able to show what it decided, and an audit trail that callers opt into is
+    an audit trail with holes in it. Pass ``audit=False`` only for benchmarking, where
+    the chain's advisory lock would serialise concurrent probes and measure itself.
+    """
     started = time.monotonic()
     query_vector = embedder.encode_query(query).tolist()
 
-    async with principal_session(principal) as session:
-        chunks = await _ann_query(
-            session, embedder=embedder, query_vector=query_vector, k=k, ef_search=ef_search
-        )
-
-    withheld: int | None = None
+    # Computed before the principal transaction so the denied ids can be written into
+    # the audit entry from inside it. Scoped to the principal's own tenant: comparing
+    # against the whole database would count other tenants' chunks as "withheld", which
+    # turns a transparency feature into a side channel disclosing other corpora exist.
+    unfiltered: list[RetrievedChunk] = []
     if count_withheld:
-        # Scoped to the principal's own tenant. Comparing against the whole database
-        # would count other tenants' chunks as "withheld", which turns a transparency
-        # feature into a side channel disclosing that other corpora exist at all.
         async with admin_session() as session:
             unfiltered = await _ann_query(
                 session,
@@ -150,12 +184,38 @@ async def search(
                 ef_search=ef_search,
                 tenant_id=principal.tenant_id,
             )
-        visible_ids = {c.chunk_id for c in chunks}
-        withheld = sum(1 for c in unfiltered if c.chunk_id not in visible_ids)
+
+    async with principal_session(principal) as session:
+        chunks = await _ann_query(
+            session, embedder=embedder, query_vector=query_vector, k=k, ef_search=ef_search
+        )
+
+        withheld: int | None = None
+        denied_docs: list[UUID] = []
+        if count_withheld:
+            visible = {c.chunk_id for c in chunks}
+            blocked = [c for c in unfiltered if c.chunk_id not in visible]
+            withheld = len(blocked)
+            denied_docs = sorted({UUID(c.document_id) for c in blocked})
+
+        latency_ms = int((time.monotonic() - started) * 1000)
+
+        if audit:
+            # Same transaction as the query: the record and the read it describes commit
+            # together, or neither does.
+            await audit_log.append(
+                session,
+                principal,
+                action="search",
+                query_text=query,
+                retrieved=sorted({UUID(c.document_id) for c in chunks}),
+                denied=denied_docs,
+                latency_ms=latency_ms,
+            )
 
     return SearchResult(
         query=query,
         chunks=chunks,
-        latency_ms=int((time.monotonic() - started) * 1000),
+        latency_ms=latency_ms,
         withheld=withheld,
     )

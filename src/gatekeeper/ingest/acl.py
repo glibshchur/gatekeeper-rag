@@ -49,6 +49,14 @@ def glob_to_regex(pattern: str) -> re.Pattern[str]:
     return re.compile("".join(out))
 
 
+SENSITIVITY_RANK = {
+    Sensitivity.PUBLIC: 0,
+    Sensitivity.INTERNAL: 1,
+    Sensitivity.CONFIDENTIAL: 2,
+    Sensitivity.RESTRICTED: 3,
+}
+
+
 class ResolvedAcl(BaseModel):
     """The effective access attributes for one document."""
 
@@ -59,6 +67,7 @@ class ResolvedAcl(BaseModel):
     need_to_know_tags: list[str]
     jurisdiction: list[str]
     rule: str
+    source: str = "inherited"
 
 
 class AclRule(BaseModel):
@@ -89,11 +98,70 @@ class AclRule(BaseModel):
         return sorted(set(found))
 
 
+class ChunkOverride(BaseModel):
+    """A stricter ACL for the parts of a document that deserve one.
+
+    A salary table inside an otherwise-ordinary handbook page should not be readable by
+    everyone who may read the page. Overrides match on the chunk's heading path, so the
+    unit of protection is the section the author wrote, not an arbitrary offset.
+    """
+
+    name: str
+    within: list[str] = Field(default_factory=lambda: ["**"])
+    heading_matches: str
+    sensitivity: Sensitivity | None = None
+    min_clearance: Clearance | None = None
+    allowed_groups: list[str] = Field(default_factory=list)
+    need_to_know_tags: list[str] = Field(default_factory=list)
+
+    def applies_to(self, path: str, heading_path: list[str]) -> bool:
+        if not any(glob_to_regex(p).match(path) for p in self.within):
+            return False
+        return re.search(self.heading_matches, " > ".join(heading_path), re.IGNORECASE) is not None
+
+
+def tighten(base: ResolvedAcl, override: ChunkOverride) -> ResolvedAcl:
+    """Combine a document ACL with an override so the result can only be *stricter*.
+
+    This is a meet, not an assignment: clearance and sensitivity take the maximum, tags
+    take the union, and groups take the **intersection**. Writing it this way means a
+    malformed override cannot widen access -- the worst it can do is make a chunk
+    unreachable, which the ingest report counts and surfaces. Letting an override simply
+    replace the ACL would put "a typo in a YAML file grants access" on the table, and in
+    this system that is the one outcome worth designing out entirely.
+    """
+    groups = (
+        sorted(set(base.allowed_groups) & set(override.allowed_groups))
+        if override.allowed_groups
+        else list(base.allowed_groups)
+    )
+    sensitivity = base.sensitivity
+    if (
+        override.sensitivity is not None
+        and SENSITIVITY_RANK[override.sensitivity] > SENSITIVITY_RANK[base.sensitivity]
+    ):
+        sensitivity = override.sensitivity
+    clearance = base.min_clearance
+    if override.min_clearance is not None and override.min_clearance > base.min_clearance:
+        clearance = override.min_clearance
+    return ResolvedAcl(
+        sensitivity=sensitivity,
+        min_clearance=clearance,
+        allowed_groups=groups,
+        owner_group=base.owner_group,
+        need_to_know_tags=sorted(set(base.need_to_know_tags) | set(override.need_to_know_tags)),
+        jurisdiction=list(base.jurisdiction),
+        rule=f"{base.rule}+{override.name}",
+        source="override",
+    )
+
+
 class AclRuleSet(BaseModel):
     version: int
     source: str
     defaults: AclRule
     rules: list[AclRule]
+    chunk_overrides: list[ChunkOverride] = Field(default_factory=list)
 
     def resolve(self, path: str) -> ResolvedAcl:
         rule = next((r for r in self.rules if r.matches(path)), self.defaults)
@@ -106,6 +174,27 @@ class AclRuleSet(BaseModel):
             jurisdiction=rule.jurisdiction_for(path),
             rule=rule.name,
         )
+
+    def resolve_chunk(self, base: ResolvedAcl, path: str, heading_path: list[str]) -> ResolvedAcl:
+        """Apply every matching override, in file order. Each one can only tighten.
+
+        Overrides never apply to a **public** document. A public document has no access
+        control to tighten: the content is world-readable at the source, so restricting
+        one of its chunks hides it from search while changing nothing about who can read
+        it. That is a retrieval regression dressed as a security control.
+
+        It is also where heading regexes go wrong. On this corpus the rule caught
+        "GitLab Values > … > Equity not just equality" -- a diversity heading, matched by
+        a pattern meant for stock equity -- and would have made a published values page
+        unsearchable to everyone.
+        """
+        if base.sensitivity == Sensitivity.PUBLIC:
+            return base
+        acl = base
+        for override in self.chunk_overrides:
+            if override.applies_to(path, heading_path):
+                acl = tighten(acl, override)
+        return acl
 
 
 def load_rules(path: Path) -> AclRuleSet:

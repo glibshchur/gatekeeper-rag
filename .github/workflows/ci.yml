@@ -64,6 +64,45 @@ jobs:
       - name: RLS and retrieval integration tests
         run: uv run pytest tests/integration -q
 
+  authorization-gate:
+    # A separate job so a failure here is unmistakable in the checks list. These are the
+    # tests that decide whether the project's central claim is true; they must never be
+    # skipped, quarantined, or folded into a general "tests" green tick.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gatekeeper
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gatekeeper"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - run: uv run alembic upgrade head
+      - name: Access model — oracle vs database, RLS, ABAC, audit chain
+        run: |
+          uv run pytest -q \
+            tests/unit/test_oracle.py \
+            tests/unit/test_acl_overrides.py \
+            tests/unit/test_audit.py \
+            tests/integration/test_rls.py \
+            tests/integration/test_abac.py \
+            tests/integration/test_audit_chain.py
+      - name: Note
+        run: |
+          echo "The full red-team corpus (\`make redteam\`) needs an embedded corpus and" \
+               "runs locally or nightly, not per-PR. The reconciliation it performs over" \
+               "the whole corpus is performed here over the ABAC fixture." \
+               >> $GITHUB_STEP_SUMMARY
+
   acl-review:
     # Changes to the access model get their own visible check, so an ACL edit can never
     # ride along unnoticed in an unrelated pull request.

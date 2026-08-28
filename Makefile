@@ -38,6 +38,18 @@ stats: ## Show indexed chunk counts per embedding space
 ask: ## Ask a question as a principal, e.g. make ask Q="expense limit?" WHO=dana
 	uv run gatekeeper ask "$(Q)" --as $(WHO)
 
+reacl: ## Re-apply corpus/acl_rules.yaml to existing chunks (no re-embedding)
+	uv run gatekeeper index reacl
+
+redteam: ## Run the adversarial corpus; exits non-zero on any leak
+	uv run gatekeeper redteam
+
+bench: ## Measure what RLS costs ANN search; writes docs/BENCHMARKS.md
+	uv run gatekeeper bench
+
+verify-audit: ## Verify the tamper-evidence of the audit chain
+	uv run gatekeeper audit
+
 ui: ## Serve the demo console on http://127.0.0.1:8077
 	uv run gatekeeper serve
 
@@ -61,4 +73,4 @@ test: ## Unit tests only (no docker required)
 test-all: ## Full suite including RLS integration tests (needs docker)
 	uv run pytest -q
 
-.PHONY: help install up down nuke migrate fetch seed index repair stats ask ui whoami bootstrap lint fmt test test-all
+.PHONY: help install up down nuke migrate fetch seed index repair reacl stats redteam bench verify-audit ask ui whoami bootstrap lint fmt test test-all
