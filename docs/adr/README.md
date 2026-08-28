@@ -13,3 +13,4 @@ useful than the reasoning that turned out to be right.
 | [0001](0001-postgres-as-the-only-datastore.md) | Postgres is the only datastore | Accepted |
 | [0002](0002-row-level-security-over-application-filtering.md) | Authorization lives in row-level security | Accepted |
 | [0003](0003-abac-over-rbac.md) | Attribute-based access control, not role-based | Accepted |
+| [0004](0004-embedding-columns-on-chunks.md) | Embeddings are columns on `chunks`, one per vector space | Accepted |

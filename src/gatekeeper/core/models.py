@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from pgvector.sqlalchemy import HALFVEC
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -149,6 +150,17 @@ class Chunk(Base):
     allowed_groups: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     min_clearance: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
     acl_source: Mapped[str] = mapped_column(Text, nullable=False, default="inherited")
+
+    # One column per embedding space. The dimension is part of the column type, so a
+    # single nullable column cannot serve two models -- and Phase 3's ablation needs both
+    # indexed at once to compare retrieval quality over the same corpus.
+    #
+    # These live on `chunks` rather than in a join table on purpose: the RLS policy is on
+    # this table, so the authorization predicate and the ANN scan meet in one relation
+    # instead of being separated by a join the planner would have to filter after.
+    embedding_384: Mapped[list[float] | None] = mapped_column(HALFVEC(384))
+    embedding_1536: Mapped[list[float] | None] = mapped_column(HALFVEC(1536))
+    embedding_model: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = _now()
 

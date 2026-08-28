@@ -9,8 +9,9 @@ a compromised API process leaks documents. `gatekeeper-rag` pushes authorization
 Postgres row-level security, so the database itself refuses to return rows the caller is
 not cleared to see — and the query layer connects as a role that *cannot* bypass it.
 
-> **Status: Phase 0 of 6.** Foundations and the authorization substrate are in place.
-> Retrieval lands in Phase 1. See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full roadmap.
+> **Status: Phase 1 of 6.** The authorization substrate and an end-to-end retrieval
+> pipeline are in place. Hybrid search, reranking, and the evaluation harness land in
+> Phase 3. See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full roadmap.
 
 ---
 
@@ -26,7 +27,50 @@ make test-all    # includes the RLS isolation tests
 
 `make bootstrap` clones the [GitLab Handbook](https://gitlab.com/gitlab-com/content-sites/handbook)
 (4,586 Markdown files, MIT-licensed), overlays a plausible enterprise access model onto its
-real departmental structure, and loads it into Postgres.
+real departmental structure, chunks and embeds it locally, and loads it into Postgres.
+Answer *generation* is the one feature that needs an API key; without one the CLI does
+retrieval and says so.
+
+## The demo
+
+Same question, same corpus, same ranking function — two principals:
+
+```console
+$ make ask Q="What is the board meeting cadence and who attends?" WHO=raj
+asked as Raj Mehta — Backend Engineer  clearance=1 groups=all-employees, engineering
+5 sources in 58 ms · 1 withheld by authorization
+
+  #  score  sensitivity  source
+  1  0.701  public       Cadence — Overview > Quarter
+  2  0.662  public       Cadence — Overview > Week
+  ...
+
+$ make ask Q="What is the board meeting cadence and who attends?" WHO=mira
+asked as Mira Lindqvist — CFO  clearance=3 groups=all-employees, finance, executives
+5 sources in 53 ms
+
+  #  score  sensitivity  source
+  1  0.701  public       Cadence — Overview > Quarter
+  2  0.677  restricted   CEO — Why I'm at GitLab > CEO Meeting Cadence   ← only Mira
+  ...
+```
+
+Raj is not filtered out of a list he was shown. The row never leaves Postgres.
+
+## What Phase 1 delivers
+
+- **Structure-aware Markdown chunking**: heading hierarchy preserved and prefixed onto
+  every chunk, tables and code fences atomic, oversized tables split on row boundaries
+  with the header repeated, sentence-boundary splits for prose.
+- **Two embedding backends behind one interface**: `bge-small-en-v1.5` via ONNX Runtime on
+  CPU (default, no API key) and OpenAI `text-embedding-3-*`. Chunk size is derived from
+  the backend's context window, not hardcoded.
+- **Dense retrieval with the ACL predicate inside the vector scan** — `halfvec` HNSW
+  indexes live on the same relation as the RLS policy, so ranking and authorization are
+  one scan. See [ADR 0004](docs/adr/0004-embedding-columns-on-chunks.md).
+- **Cited answer generation** with source spotlighting, hallucinated-citation rejection,
+  and an explicit ungrounded warning when the model cites nothing.
+- Content-addressed blob storage in MinIO; incremental re-index keyed on content hash.
 
 ## What Phase 0 delivers
 
@@ -66,9 +110,9 @@ rather than contrived.
 ```
 src/gatekeeper/
 ├─ core/        principals, models, RLS-aware session management
-├─ ingest/      ACL derivation, corpus loaders          (Phase 0–1)
-├─ retrieval/   hybrid search, fusion, rerank, planning (Phase 3–4)
-├─ llm/         provider abstraction                    (Phase 1)
+├─ ingest/      ACL derivation, chunking, blobs, pipeline
+├─ retrieval/   dense search · hybrid, rerank, planning (Phase 3–4)
+├─ llm/         embeddings, generation, provider abstraction
 ├─ evals/       harness, metrics, regression gates      (Phase 3)
 ├─ redteam/     exfiltration + injection attack suite   (Phase 2–4)
 └─ apps/        api · worker · mcp                      (Phase 4–5)

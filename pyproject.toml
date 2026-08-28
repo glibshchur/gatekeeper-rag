@@ -18,9 +18,21 @@ dependencies = [
     "typer>=0.15.1",
     "rich>=13.9.4",
     "boto3>=1.35.0",
+    "pgvector>=0.3.6",
+    "numpy>=2.1.0",
+    "onnxruntime>=1.20.0",
+    "tokenizers>=0.21.0",
+    "huggingface-hub>=0.27.0",
 ]
 
 [project.optional-dependencies]
+# Hosted model providers are optional on purpose: everything except answer generation
+# runs with no API key at all, via the local ONNX backend.
+providers = [
+    "openai>=1.60.0",
+    "anthropic>=0.45.0",
+    "tiktoken>=0.8.0",
+]
 dev = [
     "pytest>=8.3.4",
     "pytest-asyncio>=0.25.0",
@@ -63,7 +75,9 @@ explicit_package_bases = true
 namespace_packages = true
 
 [[tool.mypy.overrides]]
-module = ["frontmatter.*", "testcontainers.*"]
+# frontmatter and onnxruntime ship no stubs; openai/tiktoken live in an optional extra
+# and are imported lazily, so they are legitimately absent from a default install.
+module = ["frontmatter.*", "onnxruntime.*", "openai.*", "tiktoken.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

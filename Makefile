@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 CORPUS ?= full
+WHO ?= raj
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -28,10 +29,19 @@ fetch: ## Clone the GitLab handbook corpus into corpus/sources/
 seed: ## Load the corpus into Postgres with derived ACLs (CORPUS=full|small)
 	uv run gatekeeper corpus load --profile $(CORPUS)
 
-whoami: ## Show what a given principal can see, e.g. make whoami WHO=dana@acme
+index: ## Chunk and embed the loaded corpus (idempotent; --force to re-chunk)
+	uv run gatekeeper index build
+
+stats: ## Show indexed chunk counts per embedding space
+	uv run gatekeeper index stats
+
+ask: ## Ask a question as a principal, e.g. make ask Q="expense limit?" WHO=dana
+	uv run gatekeeper ask "$(Q)" --as $(WHO)
+
+whoami: ## Show what a given principal can see, e.g. make whoami WHO=dana
 	uv run gatekeeper principals show $(WHO)
 
-bootstrap: up migrate fetch seed ## One command from nothing to a queryable system
+bootstrap: up migrate fetch seed index ## One command from nothing to a queryable system
 
 lint: ## ruff + mypy
 	uv run ruff check src tests
@@ -48,4 +58,4 @@ test: ## Unit tests only (no docker required)
 test-all: ## Full suite including RLS integration tests (needs docker)
 	uv run pytest -q
 
-.PHONY: help install up down nuke migrate fetch seed whoami bootstrap lint fmt test test-all
+.PHONY: help install up down nuke migrate fetch seed index stats ask whoami bootstrap lint fmt test test-all
