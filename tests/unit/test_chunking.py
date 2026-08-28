@@ -129,12 +129,25 @@ def test_overlap_repeats_trailing_content() -> None:
     assert tail in with_overlap[1].content
 
 
-def test_an_oversized_code_fence_is_emitted_whole_and_flagged() -> None:
+def test_a_code_fence_within_budget_stays_intact() -> None:
+    small = "```py\nx = 1\ny = 2\n```"
+    chunks = chunk_markdown(f"# R\n\n{small}\n", words, target_tokens=200)
+    assert any(c.content.count("```") == 2 for c in chunks)
+
+
+def test_an_oversized_code_fence_is_split_on_line_boundaries_and_flagged() -> None:
+    """Splitting a code fence produces syntactically meaningless fragments, which is why
+    an earlier version emitted it whole. That was wrong: whole means the embedder
+    truncates it at its context limit, so the tail is not merely fragmented but absent.
+    A fragment that can be retrieved beats a fragment that cannot."""
     big = "```py\n" + "\n".join(f"line_{i} = {i}" for i in range(200)) + "\n```"
     chunks = chunk_markdown(f"# R\n\n{big}\n", words, target_tokens=30)
-    fenced = [c for c in chunks if c.content.count("```") == 2]
-    assert fenced, "the fence must survive intact rather than be split"
-    assert fenced[0].oversized
+    assert len(chunks) > 1
+    assert all(c.token_count <= 30 for c in chunks)
+    assert all(c.oversized for c in chunks)
+    # Splitting on line boundaries keeps individual statements readable.
+    assert "line_0 = 0" in chunks[0].content
+    assert "line_199 = 199" in chunks[-1].content
 
 
 def test_an_oversized_table_splits_on_rows_and_repeats_the_header() -> None:
@@ -169,3 +182,51 @@ def test_a_document_with_only_headings_yields_nothing() -> None:
     # There is no content to retrieve, and a chunk containing only a breadcrumb would be
     # noise that outranks real answers on short queries.
     assert chunk_markdown("# A\n\n## B\n\n### C\n", words) == []
+
+
+# --- the last-resort split -------------------------------------------------
+
+
+def test_a_giant_unsplittable_blob_is_split_rather_than_truncated() -> None:
+    """Regression. `handbook/security/corporate/systems/_index.md` is built from raw HTML
+    <table> markup: no Markdown table syntax, no sentence boundaries. It reached the
+    chunker as one 45,343-token unit, was emitted whole, and the embedder then truncated
+    it at 512 tokens -- putting ~99% of the page in the database as unretrievable text,
+    with no error raised anywhere."""
+    blob = " ".join(f"<td>cell{i}</td>" for i in range(4000))
+    chunks = chunk_markdown(f"# Systems\n\n{blob}\n", words, target_tokens=100)
+    assert len(chunks) > 10
+    assert all(c.token_count <= 100 for c in chunks)
+    assert all(c.oversized for c in chunks[1:]), "degraded splits must be flagged as such"
+
+
+def test_no_chunk_can_exceed_the_target_regardless_of_input() -> None:
+    # The invariant the bug above violated. `oversized` now means "split without
+    # respecting semantic boundaries", never "larger than the model can embed".
+    pathological = [
+        "x" * 50_000,  # one enormous word, no break opportunities at all
+        "\n".join("y" * 400 for _ in range(100)),  # long lines, no spaces
+        "word " * 20_000,  # one very long line of ordinary words
+        "```\n" + ("z = 1\n" * 5_000) + "```",  # an enormous code fence
+    ]
+    for body in pathological:
+        chunks = chunk_markdown(f"# T\n\n{body}\n", words, target_tokens=80)
+        assert chunks, "pathological input must still produce chunks"
+        assert all(c.token_count <= 80 for c in chunks), f"overflow on {body[:20]!r}"
+
+
+def test_hard_split_prefers_whitespace_boundaries() -> None:
+    chunks = chunk_markdown("# T\n\n" + "alpha beta gamma " * 500, words, target_tokens=60)
+    # No chunk should begin or end mid-word when spaces were available to break on.
+    for chunk in chunks[1:]:
+        body = chunk.content.split("\n\n", 1)[-1]
+        assert body.split()[0] in {"alpha", "beta", "gamma"}
+
+
+def test_content_is_preserved_across_a_hard_split() -> None:
+    marker_count = 300
+    blob = "".join(f"<td>MARK{i}</td>" for i in range(marker_count))
+    chunks = chunk_markdown(f"# T\n\n{blob}\n", words, target_tokens=50)
+    joined = "".join(c.content for c in chunks)
+    missing = [i for i in range(marker_count) if f"MARK{i}" not in joined]
+    assert not missing, f"{len(missing)} markers lost by the split"

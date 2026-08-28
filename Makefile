@@ -44,13 +44,13 @@ whoami: ## Show what a given principal can see, e.g. make whoami WHO=dana
 bootstrap: up migrate fetch seed index ## One command from nothing to a queryable system
 
 lint: ## ruff + mypy
-	uv run ruff check src tests
-	uv run ruff format --check src tests
-	uv run mypy src
+	uv run ruff check src tests scripts
+	uv run ruff format --check src tests scripts
+	uv run mypy src scripts
 
 fmt: ## Autoformat
-	uv run ruff check --fix src tests
-	uv run ruff format src tests
+	uv run ruff check --fix src tests scripts
+	uv run ruff format src tests scripts
 
 test: ## Unit tests only (no docker required)
 	uv run pytest tests/unit -q

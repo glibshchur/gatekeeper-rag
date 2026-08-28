@@ -32,6 +32,7 @@ class IndexReport:
     chunks_written: int = 0
     oversized_chunks: int = 0
     blobs_written: int = 0
+    blob_failures: int = 0
 
     def as_rows(self) -> list[tuple[str, str]]:
         return [
@@ -41,6 +42,7 @@ class IndexReport:
             ("chunks written", f"{self.chunks_written:,}"),
             ("oversized chunks", f"{self.oversized_chunks:,}"),
             ("blobs written", f"{self.blobs_written:,}"),
+            ("blob failures", f"{self.blob_failures:,}"),
         ]
 
 
@@ -152,10 +154,19 @@ async def _index_one(
         return False
 
     raw = source_file.read_bytes()
-    key = blobs.blob_key(tenant_slug, document.source, document.content_hash)
-    if not blobs.exists(key):
-        blobs.put(key, raw)
-        report.blobs_written += 1
+
+    # Blob storage is secondary in Phase 1: nothing reads from it yet, and the git clone
+    # is the source of truth. A transient object-store failure must not abort a batch
+    # that takes half an hour -- it did once, on a MinIO clock skew, and cost the whole
+    # run. Failures are counted and surfaced in the report rather than swallowed.
+    try:
+        key = blobs.blob_key(tenant_slug, document.source, document.content_hash)
+        if not blobs.exists(key):
+            blobs.put(key, raw)
+            report.blobs_written += 1
+    except Exception:
+        report.blob_failures += 1
+        logger.warning("blob upload failed for %s", document.path, exc_info=True)
 
     body = raw.decode("utf-8", errors="replace")
     text_chunks = chunk_markdown(
@@ -167,6 +178,17 @@ async def _index_one(
     )
     if not text_chunks:
         return False
+
+    # Defensive: the chunker guarantees this, but a truncated embedding is invisible at
+    # query time -- it produces a plausible vector for text the model never saw. Better
+    # to fail the ingest of one document than to poison the index silently.
+    too_long = [c for c in text_chunks if c.token_count > space.max_tokens]
+    if too_long:
+        raise ValueError(
+            f"{document.path}: {len(too_long)} chunk(s) exceed {space.model}'s "
+            f"{space.max_tokens}-token context (largest {max(c.token_count for c in too_long)}); "
+            "the embedder would truncate them"
+        )
 
     vectors = embedder.encode_passages([c.content for c in text_chunks])
 

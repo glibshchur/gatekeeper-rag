@@ -163,6 +163,54 @@ def _split_table(table: str, count: TokenCounter, budget: int) -> Iterator[str]:
         yield header_text + "\n" + "\n".join(current)
 
 
+def _hard_split(text: str, count: TokenCounter, budget: int) -> Iterator[str]:
+    """Last-resort split for a unit still over budget after every semantic split failed.
+
+    This exists because of a real defect found in the GitLab corpus: a page built from
+    raw HTML ``<table>`` markup has no Markdown table syntax and no sentence boundaries,
+    so it arrived here as a single 45,000-token "sentence". Emitting it whole meant the
+    embedder truncated it at its 512-token context and roughly 99% of the page became
+    unretrievable -- with no error anywhere, because truncation is silent.
+
+    A coarse split is strictly better than silent truncation. Chunks produced here are
+    flagged ``oversized``, which now means "split without respecting semantic
+    boundaries", not "too large" -- the latter can no longer happen.
+
+    Windows are sized from the observed characters-per-token ratio rather than by
+    re-counting a growing string, which would be quadratic on a page this size.
+    """
+    budget = max(budget, 1)
+    total = count(text)
+    if total <= budget:
+        yield text
+        return
+
+    chars_per_token = max(len(text) / max(total, 1), 1.0)
+    window = max(int(budget * chars_per_token * 0.9), 64)
+
+    start = 0
+    while start < len(text):
+        end = min(start + window, len(text))
+        if end < len(text):
+            # Prefer to break on a newline, then a space, in the back half of the window.
+            floor = start + window // 2
+            cut = text.rfind("\n", floor, end)
+            if cut <= start:
+                cut = text.rfind(" ", floor, end)
+            if cut > start:
+                end = cut
+
+        piece = text[start:end]
+        # The ratio is an estimate; verify and shrink rather than trusting it.
+        while count(piece) > budget and len(piece) > 1:
+            piece = piece[: max(int(len(piece) * 0.85), 1)]
+        end = start + max(len(piece), 1)
+
+        if piece.strip():
+            yield piece.strip()
+        start = end
+
+
 def _heading_prefix(path: list[str]) -> str:
     return " > ".join(path)
 
@@ -233,6 +281,15 @@ def chunk_markdown(
             carried.pop(0)
         return carried
 
+    def emit_degraded(unit: str, budget: int) -> None:
+        """Flush whatever is pending, then emit `unit` in budget-sized pieces."""
+        nonlocal pending
+        if pending:
+            emit()
+        for piece in _hard_split(unit, count, budget):
+            pending = [piece]
+            emit(force_oversized=True)
+
     def add(unit: str) -> None:
         nonlocal pending
         cost = count(unit)
@@ -264,29 +321,20 @@ def chunk_markdown(
         if block.kind is BlockKind.TABLE:
             for piece in _split_table(block.text, count, max(budget, 1)):
                 if count(piece) > budget:
-                    if pending:
-                        emit()
-                    pending = [piece]
-                    emit(force_oversized=True)
+                    emit_degraded(piece, budget)
                 else:
                     add(piece)
             continue
 
         if block.atomic:
-            # A code fence larger than the budget is emitted whole and flagged. Splitting
-            # it would produce syntactically meaningless fragments.
-            if pending:
-                emit()
-            pending = [block.text]
-            emit(force_oversized=True)
+            # A code fence over budget is split only as a last resort: row-splitting and
+            # sentence-splitting do not apply, but leaving it whole would truncate it.
+            emit_degraded(block.text, budget)
             continue
 
         for sentence in split_sentences(block.text):
             if count(sentence) > budget:
-                if pending:
-                    emit()
-                pending = [sentence]
-                emit(force_oversized=True)
+                emit_degraded(sentence, budget)
             else:
                 add(sentence)
 
