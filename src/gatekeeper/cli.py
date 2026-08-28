@@ -261,6 +261,26 @@ def index_stats() -> None:
     console.print(table)
 
 
+@app.command("serve")
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8077,
+    reload: Annotated[bool, typer.Option(help="auto-reload on source changes")] = False,
+) -> None:
+    """Serve the demo console.
+
+    Binds to loopback by default. The console impersonates principals without any
+    credential check, so exposing it on 0.0.0.0 would hand anyone on the network the
+    CFO's view of the corpus.
+    """
+    import uvicorn
+
+    console.print(f"[green]console[/green] http://{host}:{port}  [dim](ctrl-c to stop)[/dim]")
+    uvicorn.run(
+        "gatekeeper.apps.api.main:app", host=host, port=port, reload=reload, log_level="warning"
+    )
+
+
 @app.command("ask")
 def ask(
     question: str,

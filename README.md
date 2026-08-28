@@ -31,6 +31,25 @@ real departmental structure, chunks and embeds it locally, and loads it into Pos
 Answer *generation* is the one feature that needs an API key; without one the CLI does
 retrieval and says so.
 
+## The console
+
+```bash
+make ui          # http://127.0.0.1:8077
+```
+
+Pick one or more principals, ask a question, and see the same query answered from
+different corpora. Each column shows what that principal retrieved, how many results
+authorization removed, and the sensitivity of every source.
+
+The sharpest thing it makes visible: ask *"How do I report a security incident?"* as Sam
+(security engineer, clearance 1) and Mira (CFO, clearance 3), and Sam gets a `restricted`
+incident-response guide that Mira does not. **Clearance is a ceiling, not a key** — a high
+clearance without the right group grants nothing.
+
+> The console impersonates principals with no credential check. That is deliberate — it is
+> what makes the comparison possible — and it is why it binds to loopback and says so in a
+> banner. Real authentication is Phase 5.
+
 ## The demo
 
 Same question, same corpus, same ranking function — two principals:
@@ -70,7 +89,9 @@ Raj is not filtered out of a list he was shown. The row never leaves Postgres.
   one scan. See [ADR 0004](docs/adr/0004-embedding-columns-on-chunks.md).
 - **Cited answer generation** with source spotlighting, hallucinated-citation rejection,
   and an explicit ungrounded warning when the model cites nothing.
-- Content-addressed blob storage in MinIO; incremental re-index keyed on content hash.
+- Content-addressed blob storage in MinIO; incremental re-index keyed on content hash,
+  and `index repair` to re-chunk only documents the current parameters invalidate.
+- A **demo console** (`make ui`) for side-by-side retrieval across principals.
 
 ## What Phase 0 delivers
 

@@ -38,6 +38,9 @@ stats: ## Show indexed chunk counts per embedding space
 ask: ## Ask a question as a principal, e.g. make ask Q="expense limit?" WHO=dana
 	uv run gatekeeper ask "$(Q)" --as $(WHO)
 
+ui: ## Serve the demo console on http://127.0.0.1:8077
+	uv run gatekeeper serve
+
 whoami: ## Show what a given principal can see, e.g. make whoami WHO=dana
 	uv run gatekeeper principals show $(WHO)
 
@@ -58,4 +61,4 @@ test: ## Unit tests only (no docker required)
 test-all: ## Full suite including RLS integration tests (needs docker)
 	uv run pytest -q
 
-.PHONY: help install up down nuke migrate fetch seed index stats ask whoami bootstrap lint fmt test test-all
+.PHONY: help install up down nuke migrate fetch seed index repair stats ask ui whoami bootstrap lint fmt test test-all

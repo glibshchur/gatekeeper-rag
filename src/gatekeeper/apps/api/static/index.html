@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gatekeeper-rag console</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #ffffff; --border: #e4e2dd; --text: #1a1917;
+    --muted: #6f6b64; --accent: #2f6f4f; --accent-soft: #e8f1ec;
+    --public: #2f6f4f; --internal: #35618e; --confidential: #97621b; --restricted: #a63232;
+    --withheld-bg: #fdeeee; --withheld-fg: #a63232; --code: #f4f3f0;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17171a; --panel: #1e1e22; --border: #33333a; --text: #e9e8e4;
+      --muted: #9a978f; --accent: #6fbf95; --accent-soft: #1f2f27;
+      --public: #6fbf95; --internal: #79aede; --confidential: #d9a441; --restricted: #e57373;
+      --withheld-bg: #2c1d1d; --withheld-fg: #e57373; --code: #26262b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 18px 24px 14px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  h1 { margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+  h1 span { color: var(--muted); font-weight: 400; }
+  .warn {
+    margin-top: 10px; padding: 8px 12px; border-radius: 8px;
+    background: var(--withheld-bg); color: var(--withheld-fg);
+    font-size: 12.5px; border: 1px solid color-mix(in srgb, var(--withheld-fg) 25%, transparent);
+  }
+  main { display: grid; grid-template-columns: 290px 1fr; gap: 22px; padding: 22px 24px 60px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
+  .panel > h2 {
+    margin: 0; padding: 11px 14px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.07em; color: var(--muted); border-bottom: 1px solid var(--border);
+  }
+  .who { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .who label {
+    display: block; padding: 9px 11px; border-radius: 8px; cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .who label:hover { background: var(--code); }
+  .who label:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); }
+  .who input { margin-right: 8px; accent-color: var(--accent); }
+  .who .nm { font-weight: 600; font-size: 13.5px; }
+  .who .meta { color: var(--muted); font-size: 11.5px; margin: 3px 0 0 22px; }
+  .who .bar { margin: 6px 0 0 22px; height: 4px; border-radius: 3px; background: var(--code); overflow: hidden; }
+  .who .bar i { display: block; height: 100%; background: var(--accent); }
+
+  form { display: flex; gap: 8px; margin-bottom: 16px; }
+  input[type=text] {
+    flex: 1; padding: 11px 13px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 14.5px;
+  }
+  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    padding: 11px 18px; border-radius: var(--radius); border: 1px solid var(--accent);
+    background: var(--accent); color: #fff; font-weight: 600; font-size: 14px; cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: progress; }
+  .examples { display: flex; flex-wrap: wrap; gap: 6px; margin: -8px 0 16px; }
+  .examples button {
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+    font-weight: 400; font-size: 12px; padding: 4px 10px; border-radius: 20px;
+  }
+  .examples button:hover { color: var(--text); border-color: var(--accent); }
+
+  .cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); align-items: start; }
+  .col > h3 { margin: 0 0 2px; font-size: 14.5px; }
+  .col .sub { color: var(--muted); font-size: 11.5px; margin-bottom: 9px; }
+  .withheld {
+    display: inline-block; padding: 3px 9px; border-radius: 20px; font-size: 12px; font-weight: 600;
+    background: var(--withheld-bg); color: var(--withheld-fg); margin-bottom: 10px;
+  }
+  .withheld.none { background: var(--code); color: var(--muted); font-weight: 400; }
+
+  .answer {
+    padding: 12px 14px; border-radius: var(--radius); background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    font-size: 14px; margin-bottom: 12px; white-space: pre-wrap;
+  }
+  .answer .usage { color: var(--muted); font-size: 11.5px; margin-top: 8px; }
+  .ungrounded { color: var(--withheld-fg); font-size: 12px; margin-top: 6px; }
+
+  ol.src { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+  ol.src li { border: 1px solid var(--border); border-radius: 9px; background: var(--panel); }
+  ol.src summary {
+    padding: 9px 11px; cursor: pointer; display: flex; gap: 8px; align-items: baseline;
+    font-size: 13px; list-style: none;
+  }
+  ol.src summary::-webkit-details-marker { display: none; }
+  .n { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 15px; }
+  .sc { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; margin-left: auto; }
+  .tag {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+    padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+  }
+  .tag.public { color: var(--public); background: color-mix(in srgb, var(--public) 14%, transparent); }
+  .tag.internal { color: var(--internal); background: color-mix(in srgb, var(--internal) 14%, transparent); }
+  .tag.confidential { color: var(--confidential); background: color-mix(in srgb, var(--confidential) 16%, transparent); }
+  .tag.restricted { color: var(--restricted); background: color-mix(in srgb, var(--restricted) 16%, transparent); }
+  .body { padding: 0 11px 11px; font-size: 12.5px; color: var(--muted); white-space: pre-wrap; }
+  .body .path { display: block; font-family: ui-monospace, monospace; font-size: 11px; margin-bottom: 7px; }
+  .empty { color: var(--muted); font-size: 13px; padding: 14px; border: 1px dashed var(--border); border-radius: 9px; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>gatekeeper-rag <span>· permission-aware retrieval console</span></h1>
+  <div class="warn">
+    <strong>Demo surface, not an authenticated one.</strong> The principal switcher is
+    impersonation with no credential check — that is the point of the console, and it is
+    why this port must not be exposed. What it shows honestly is the layer beneath:
+    every result came back through row-level security over a connection that cannot bypass it.
+  </div>
+</header>
+
+<main>
+  <aside class="panel">
+    <h2>Ask as</h2>
+    <div class="who" id="who"></div>
+  </aside>
+
+  <section>
+    <form id="q">
+      <input type="text" id="question" autocomplete="off"
+             placeholder="Ask about expenses, equity, security incidents, parental leave…">
+      <button type="submit" id="go">Ask</button>
+    </form>
+    <div class="examples" id="examples"></div>
+    <div id="out"></div>
+    <p class="note" id="foot"></p>
+  </section>
+</main>
+
+<script>
+const EXAMPLES = [
+  "What is the equity refresh policy for executives?",
+  "How much can I expense for a meal on a business trip?",
+  "What is the board meeting cadence and who attends?",
+  "How do I report a security incident?",
+  "What is the parental leave policy in the Netherlands?",
+];
+
+const el = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+let principals = [];
+
+async function boot() {
+  principals = await (await fetch("/api/principals")).json();
+  const preferred = new Set(["raj", "mira"]);
+  el("who").innerHTML = principals.map(p => `
+    <label>
+      <input type="checkbox" value="${esc(p.handle)}" ${preferred.has(p.handle) ? "checked" : ""}>
+      <span class="nm">${esc(p.display_name)}</span>
+      <div class="meta">clearance ${p.clearance} · ${esc(p.groups.join(", ") || "no groups")}</div>
+      <div class="bar"><i data-bar="${esc(p.handle)}" style="width:0"></i></div>
+      <div class="meta" data-surface="${esc(p.handle)}">…</div>
+    </label>`).join("");
+
+  el("examples").innerHTML = EXAMPLES.map(q =>
+    `<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join("");
+  el("examples").onclick = (e) => {
+    const q = e.target.dataset.q;
+    if (q) { el("question").value = q; el("q").requestSubmit(); }
+  };
+
+  // Load each principal's at-rest access surface so the sidebar shows scale, not just names.
+  const surfaces = await Promise.all(
+    principals.map(p => fetch(`/api/surface/${p.handle}`).then(r => r.json()).catch(() => null)));
+  const peak = Math.max(...surfaces.filter(Boolean).map(s => s.chunks), 1);
+  surfaces.forEach(s => {
+    if (!s) return;
+    const note = document.querySelector(`[data-surface="${s.handle}"]`);
+    const bar = document.querySelector(`[data-bar="${s.handle}"]`);
+    const r = s.by_sensitivity.restricted;
+    note.textContent = `${s.chunks.toLocaleString()} chunks visible`
+      + (r ? ` · ${r.toLocaleString()} restricted` : "");
+    bar.style.width = `${(s.chunks / peak) * 100}%`;
+  });
+}
+
+function selected() {
+  return [...document.querySelectorAll('#who input:checked')].map(i => i.value);
+}
+
+function renderSources(sources) {
+  if (!sources.length) return `<div class="empty">No accessible sources matched this question.</div>`;
+  return `<ol class="src">` + sources.map((s, i) => `
+    <li>
+      <details>
+        <summary>
+          <span class="n">${i + 1}</span>
+          <span>${esc(s.label)}</span>
+          <span class="tag ${esc(s.sensitivity)}">${esc(s.sensitivity)}</span>
+          <span class="sc">${s.score.toFixed(3)}</span>
+        </summary>
+        <div class="body">
+          <span class="path">${esc(s.path)}</span>${esc(s.content.slice(0, 900))}
+        </div>
+      </details>
+    </li>`).join("") + `</ol>`;
+}
+
+function render(data) {
+  // How much of each principal's result set the others cannot reach. An earlier version
+  // outlined those sources instead, which degenerates to highlighting everything the
+  // moment two principals return disjoint results — the common case, and the one worth
+  // reading. A count says the same thing and stays legible when the answer is "all".
+  const seen = new Map();
+  data.results.forEach(r => new Set(r.sources.map(s => s.path))
+    .forEach(p => seen.set(p, (seen.get(p) || 0) + 1)));
+  const exclusiveCount = (r) =>
+    new Set(r.sources.map(s => s.path)).size
+      ? r.sources.filter(s => seen.get(s.path) < data.results.length).length
+      : 0;
+
+  el("out").innerHTML = `<div class="cols">` + data.results.map(r => `
+    <div class="col">
+      <h3>${esc(r.display_name)}</h3>
+      <div class="sub">clearance ${r.clearance} · ${esc(r.groups.join(", ") || "no groups")} · ${r.latency_ms} ms</div>
+      <div class="withheld${r.withheld ? "" : " none"}">
+        ${r.withheld ? `${r.withheld} withheld by authorization` : "nothing withheld"}
+      </div>
+      ${data.results.length > 1 && r.sources.length
+        ? `<div class="sub">${exclusiveCount(r)} of ${r.sources.length} sources unavailable to the other selected principal(s)</div>`
+        : ""}
+      ${r.answer ? `<div class="answer">${esc(r.answer.text)}
+          ${r.answer.grounded ? "" : `<div class="ungrounded">⚠ the model cited no sources — treat as ungrounded</div>`}
+          <div class="usage">${esc(r.answer.model)} · ${r.answer.input_tokens.toLocaleString()} in / ${r.answer.output_tokens.toLocaleString()} out</div>
+        </div>` : ""}
+      ${renderSources(r.sources)}
+    </div>`).join("") + `</div>`;
+
+  el("foot").textContent = data.generation_available
+    ? `Embeddings: ${data.embedding_model}. Every result was filtered by the database, not by this page.`
+    : `Embeddings: ${data.embedding_model}. Retrieval only — set GK_OPENAI_API_KEY or GK_ANTHROPIC_API_KEY and run "uv sync --extra providers" to synthesise answers.`;
+}
+
+el("q").onsubmit = async (e) => {
+  e.preventDefault();
+  const question = el("question").value.trim();
+  const handles = selected();
+  if (!question) return;
+  if (!handles.length) { el("out").innerHTML = `<div class="empty">Select at least one principal.</div>`; return; }
+
+  el("go").disabled = true;
+  el("out").innerHTML = `<div class="empty">Searching as ${handles.length} principal(s)…</div>`;
+  try {
+    const res = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question, handles, k: 8 }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    render(await res.json());
+  } catch (err) {
+    el("out").innerHTML = `<div class="empty">Request failed: ${esc(err.message)}</div>`;
+  } finally {
+    el("go").disabled = false;
+  }
+};
+
+boot();
+</script>
+</body>
+</html>
