@@ -1,0 +1,48 @@
+name: gatekeeper
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: gatekeeper
+    ports: ["5433:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gatekeeper"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    profiles: ["core"]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6380:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    profiles: ["core"]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9003"
+    environment:
+      MINIO_ROOT_USER: gatekeeper
+      MINIO_ROOT_PASSWORD: gatekeeper
+    ports: ["9002:9000", "9003:9003"]
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    profiles: ["core"]
+
+volumes:
+  pgdata:
+  miniodata:

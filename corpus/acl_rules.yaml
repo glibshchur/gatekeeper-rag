@@ -1,0 +1,241 @@
+# ---------------------------------------------------------------------------
+# Access-control derivation for the GitLab Handbook corpus.
+#
+# The handbook is published under MIT and every page in it is public. We overlay a
+# plausible enterprise access model on top of its real departmental structure, because
+# the point of this system is to demonstrate authorization, and a corpus where
+# everything is world-readable demonstrates nothing.
+#
+# Evaluation order matters: the FIRST rule whose pattern matches wins. Rules are
+# ordered most-specific first; `defaults` catches the remainder.
+#
+# Glob semantics: `**` crosses directory separators, `*` does not.
+# Paths are relative to `content/` in the handbook repo.
+#
+# Clearance: 0 external | 1 employee | 2 manager | 3 executive
+# Sensitivity: public | internal | confidential | restricted
+# ---------------------------------------------------------------------------
+version: 1
+source: gitlab-handbook
+
+defaults:
+  name: default-internal
+  patterns: ["**"]
+  sensitivity: internal
+  min_clearance: 1
+  allowed_groups: [all-employees]
+
+rules:
+  # --- Executive-only -------------------------------------------------------
+  - name: board-and-ceo
+    patterns:
+      - "handbook/board-meetings/**"
+      - "handbook/ceo/**"
+      - "handbook/leadership/**"
+    sensitivity: restricted
+    min_clearance: 3
+    allowed_groups: [executives]
+    owner_group: executives
+    need_to_know_tags: [board, strategy]
+
+  # --- Compensation ---------------------------------------------------------
+  # The demo money shot: a query about equity refusal for a regular employee.
+  - name: compensation
+    patterns:
+      - "handbook/total-rewards/compensation/**"
+      - "handbook/total-rewards/incentives.md"
+      - "handbook/total-rewards/stock-options.md"
+      - "handbook/finance/sales-comp-plan.md"
+    sensitivity: restricted
+    min_clearance: 2
+    allowed_groups: [people-ops, comp-committee, executives]
+    owner_group: people-ops
+    need_to_know_tags: [compensation, pii]
+
+  # --- Region-scoped benefits and policies ---------------------------------
+  # Exercises the ABAC `region` attribute rather than plain group membership: a
+  # Netherlands employee should not get the India Ltd leave policy as authoritative.
+  - name: entity-benefits-regional
+    patterns:
+      - "handbook/total-rewards/benefits/general-and-entity-benefits/**"
+    sensitivity: confidential
+    min_clearance: 1
+    allowed_groups: [all-employees, people-ops]
+    owner_group: people-ops
+    need_to_know_tags: [benefits]
+    jurisdiction_tokens:
+      belgium: [BE]
+      finland: [FI]
+      netherlands: [NL]
+      canada: [CA]
+      france: [FR]
+      ireland: [IE]
+      korea: [KR]
+      uk: [GB]
+      australia: [AU]
+      new-zealand: [NZ]
+      singapore: [SG]
+      inc-benefits-us: [US]
+      gitlab-gk: [JP]
+
+  - name: people-policies-regional
+    patterns:
+      - "handbook/people-policies/**"
+    sensitivity: confidential
+    min_clearance: 1
+    allowed_groups: [all-employees, people-ops]
+    owner_group: people-ops
+    need_to_know_tags: [employment]
+    jurisdiction_tokens:
+      france-sas: [FR]
+      inc-usa: [US]
+      india-ltd: [IN]
+      ireland-ltd: [IE]
+
+  - name: total-rewards-other
+    patterns: ["handbook/total-rewards/**"]
+    sensitivity: confidential
+    min_clearance: 1
+    allowed_groups: [all-employees, people-ops]
+    owner_group: people-ops
+    need_to_know_tags: [benefits]
+
+  # --- People / HR ----------------------------------------------------------
+  - name: people-compliance
+    patterns:
+      - "handbook/people-group/people-compliance/**"
+      - "handbook/people-group/offboarding/**"
+      - "handbook/labor-and-employment-notices/**"
+    sensitivity: restricted
+    min_clearance: 2
+    allowed_groups: [people-ops, legal]
+    owner_group: people-ops
+    need_to_know_tags: [pii, employment]
+
+  - name: hiring
+    patterns:
+      - "handbook/hiring/**"
+      - "handbook/job-description-library/**"
+    sensitivity: confidential
+    min_clearance: 1
+    allowed_groups: [people-ops, hiring-managers, executives]
+    owner_group: people-ops
+
+  - name: people-general
+    patterns: ["handbook/people-group/**"]
+    sensitivity: confidential
+    min_clearance: 1
+    allowed_groups: [all-employees, people-ops]
+    owner_group: people-ops
+
+  # --- Legal / Finance ------------------------------------------------------
+  - name: legal
+    patterns:
+      - "handbook/legal/**"
+      - "handbook/acquisitions/**"
+      - "handbook/entity/**"
+    sensitivity: confidential
+    min_clearance: 2
+    allowed_groups: [legal, executives]
+    owner_group: legal
+    need_to_know_tags: [legal]
+
+  - name: finance-restricted
+    patterns:
+      - "handbook/finance/internal-audit/**"
+      - "handbook/finance/payroll.md"
+      - "handbook/finance/tax/**"
+      - "handbook/finance/investor-relations.md"
+    sensitivity: restricted
+    min_clearance: 2
+    allowed_groups: [finance, executives]
+    owner_group: finance
+    need_to_know_tags: [financial]
+
+  - name: finance-general
+    patterns: ["handbook/finance/**"]
+    sensitivity: confidential
+    min_clearance: 1
+    allowed_groups: [finance, executives, all-employees]
+    owner_group: finance
+
+  # --- Security -------------------------------------------------------------
+  - name: security-operations
+    patterns:
+      - "handbook/security/security-operations/**"
+      - "handbook/security/threat-management/**"
+      - "handbook/security/security-assurance/**"
+    sensitivity: restricted
+    min_clearance: 1
+    allowed_groups: [security]
+    owner_group: security
+    need_to_know_tags: [security]
+
+  - name: security-general
+    patterns: ["handbook/security/**"]
+    sensitivity: confidential
+    min_clearance: 1
+    allowed_groups: [security, engineering, all-employees]
+    owner_group: security
+
+  # --- Departmental ---------------------------------------------------------
+  - name: engineering
+    patterns:
+      - "handbook/engineering/**"
+      - "handbook/product-development/**"
+      - "handbook/business-technology/**"
+      - "handbook/it/**"
+    sensitivity: internal
+    min_clearance: 1
+    allowed_groups: [engineering, all-employees]
+    owner_group: engineering
+
+  - name: sales
+    patterns:
+      - "handbook/sales/**"
+      - "handbook/resellers/**"
+      - "handbook/alliances/**"
+      - "handbook/solutions-architects/**"
+    sensitivity: confidential
+    min_clearance: 1
+    allowed_groups: [sales, executives]
+    owner_group: sales
+
+  - name: marketing
+    patterns: ["handbook/marketing/**"]
+    sensitivity: internal
+    min_clearance: 1
+    allowed_groups: [marketing, sales, all-employees]
+    owner_group: marketing
+
+  - name: customer-facing
+    patterns:
+      - "handbook/support/**"
+      - "handbook/customer-success/**"
+      - "handbook/customer-experience/**"
+    sensitivity: internal
+    min_clearance: 1
+    allowed_groups: [support, customer-success, all-employees]
+    owner_group: support
+
+  - name: data
+    patterns: ["handbook/enterprise-data/**"]
+    sensitivity: confidential
+    min_clearance: 1
+    allowed_groups: [data, engineering]
+    owner_group: data
+
+  # --- Public ---------------------------------------------------------------
+  # Reachable without any group membership, including by unauthenticated principals.
+  - name: public-company
+    patterns:
+      - "handbook/values/**"
+      - "handbook/about/**"
+      - "handbook/company/**"
+      - "handbook/communication/**"
+      - "teamops/**"
+      - "handbook/teamops/**"
+      - "handbook/_index.md"
+    sensitivity: public
+    min_clearance: 0
+    allowed_groups: []

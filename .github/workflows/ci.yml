@@ -1,0 +1,82 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GK_DATABASE_OWNER_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/gatekeeper
+  GK_DATABASE_URL: postgresql+asyncpg://gatekeeper_app:gatekeeper_app@localhost:5432/gatekeeper
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - run: uv run mypy src
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gatekeeper
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gatekeeper"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+      - name: Verify migrations are reversible
+        # A downgrade that does not work is a downgrade that will not be there when it
+        # is needed, which for the RLS migration means no way to recover a broken policy.
+        run: |
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+      - name: Unit tests
+        run: uv run pytest tests/unit -q
+      - name: RLS integration tests
+        run: uv run pytest tests/integration -q
+
+  acl-review:
+    # Changes to the access model get their own visible check, so an ACL edit can never
+    # ride along unnoticed in an unrelated pull request.
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Flag changes to the authorization surface
+        run: |
+          changed=$(git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            -- corpus/acl_rules.yaml 'infra/migrations/**' src/gatekeeper/core/principal.py)
+          if [ -n "$changed" ]; then
+            echo "::warning title=Authorization surface changed::$changed"
+            echo "### ⚠️ Authorization surface changed" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$changed" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No changes to the authorization surface." >> $GITHUB_STEP_SUMMARY
+          fi
