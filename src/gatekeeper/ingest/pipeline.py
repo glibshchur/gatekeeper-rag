@@ -11,8 +11,9 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gatekeeper.core.db import admin_session
@@ -55,6 +56,7 @@ async def build_index(
     overlap_tokens: int = 64,
     limit: int | None = None,
     force: bool = False,
+    document_ids: Sequence[UUID] | None = None,
     batch_documents: int = 25,
 ) -> IndexReport:
     """Chunk and embed every document in the tenant that needs it.
@@ -85,6 +87,10 @@ async def build_index(
             await session.execute(select(Tenant.id).where(Tenant.slug == tenant_slug))
         ).scalar_one()
         stmt = select(Document).where(Document.tenant_id == tenant_id).order_by(Document.path)
+        if document_ids is not None:
+            if not document_ids:
+                return report
+            stmt = stmt.where(Document.id.in_(document_ids))
         if limit:
             stmt = stmt.limit(limit)
         documents = list((await session.execute(stmt)).scalars())
@@ -222,5 +228,27 @@ async def _index_one(
     return True
 
 
-def summarise_spaces(counts: Sequence[tuple[str, int]]) -> str:
-    return ", ".join(f"{model}={n:,}" for model, n in counts) or "none"
+async def documents_needing_rechunk(
+    tenant_slug: str, embedder: Embedder, target_tokens: int | None = None
+) -> list[UUID]:
+    """Documents whose stored chunks violate the current chunking parameters.
+
+    Changing chunker logic does not invalidate the whole index. The hard-split path only
+    triggers on units that exceed the budget, so a document with no over-target chunk is
+    provably unaffected by that change and does not need re-embedding. On the GitLab
+    corpus this is 611 documents out of 4,586 -- a repair that takes minutes instead of
+    an hour of re-embedding text that would come out identical.
+    """
+    target = target_tokens or int(embedder.space.max_tokens * 0.75)
+    async with admin_session() as session:
+        tenant_id = (
+            await session.execute(select(Tenant.id).where(Tenant.slug == tenant_slug))
+        ).scalar_one()
+        rows = await session.execute(
+            select(distinct(Chunk.document_id)).where(
+                Chunk.tenant_id == tenant_id,
+                Chunk.embedding_model == embedder.space.model,
+                Chunk.token_count > target,
+            )
+        )
+    return [row[0] for row in rows]

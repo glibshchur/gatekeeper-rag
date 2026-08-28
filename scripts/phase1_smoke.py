@@ -67,8 +67,9 @@ async def section_index_coverage(embedder: Embedder) -> None:
             )
         ).one()
         chunks, indexed_docs, mean_tokens, median_tokens, max_tokens = row
+        target = int(embedder.space.max_tokens * 0.75)
         oversized = (
-            await session.execute(select(func.count(Chunk.id)).where(Chunk.token_count > 384))
+            await session.execute(select(func.count(Chunk.id)).where(Chunk.token_count > target))
         ).scalar_one()
 
     table = Table(title="1 · Index coverage", title_justify="left", show_header=False)
@@ -79,7 +80,24 @@ async def section_index_coverage(embedder: Embedder) -> None:
     table.add_row(
         "tokens mean / median / max", f"{mean_tokens:.0f} / {median_tokens:.0f} / {max_tokens}"
     )
-    table.add_row("over target (384)", f"{oversized:,} ({oversized / max(chunks, 1):.1%})")
+    table.add_row(
+        f"over target ({target})",
+        f"{oversized:,} ({oversized / max(chunks, 1):.1%})",
+    )
+
+    # The invariant that actually matters. Exceeding the *target* is a quality issue --
+    # subword tokenizers are not additive, so a chunk assembled to 384 can measure a
+    # little over. Exceeding the model's *context* is a correctness bug: the embedder
+    # truncates silently, so the tail becomes unretrievable text that still occupies a
+    # row and still returns a plausible-looking vector.
+    limit = embedder.space.max_tokens
+    within = max_tokens <= limit
+    table.add_row(
+        f"within {embedder.space.model} context ({limit})",
+        "[green]pass[/green]"
+        if within
+        else f"[bold red]FAIL — largest chunk is {max_tokens} tokens[/bold red]",
+    )
     console.print(table)
     console.print()
 
