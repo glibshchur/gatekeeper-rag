@@ -511,6 +511,21 @@ def audit_verify() -> None:
     console.print(f"[green]audit chain intact[/green] — {verified:,} entries verified")
 
 
+@app.command("mcp")
+def mcp(
+    who: Annotated[str, typer.Option("--as", help="principal handle to bind this server to")] = "",
+    rerank: Annotated[bool, typer.Option(help="load the cross-encoder")] = True,
+) -> None:
+    """Serve the knowledge base over MCP on stdio, scoped to one principal.
+
+    Nothing may be written to stdout: it is the JSON-RPC channel. This command therefore
+    prints nothing itself, and the server pins logging to stderr.
+    """
+    from gatekeeper.apps.mcp.server import main as serve_mcp
+
+    serve_mcp(who or None, with_reranker=rerank)
+
+
 @app.command("serve")
 def serve(
     host: str = "127.0.0.1",

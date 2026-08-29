@@ -18,3 +18,4 @@ useful than the reasoning that turned out to be right.
 | [0006](0006-filtered-ann-and-index-selectivity.md) | Filtered ANN: the access predicate can cost you the vector index | Resolved (Phase 3) |
 | [0007](0007-explicit-claims-not-ambient-session-state.md) | Authorization reads its inputs as arguments, not from the session | Accepted |
 | [0008](0008-hybrid-search-measured-and-disabled.md) | Hybrid search: built, measured, and off by default | Accepted |
+| [0009](0009-mcp-surface-and-one-principal-per-process.md) | MCP: one principal per process; withheld results are counts | Accepted |

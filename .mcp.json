@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "gatekeeper": {
+      "command": "uv",
+      "args": ["run", "gatekeeper", "mcp"],
+      "env": {
+        "GK_MCP_PRINCIPAL": "raj"
+      }
+    }
+  }
+}

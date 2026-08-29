@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     s3_secret_key: str = "gatekeeper"
     s3_bucket: str = "gatekeeper-raw"
 
+    # The MCP server binds to exactly one principal for its lifetime; see
+    # gatekeeper.apps.mcp.server for why that is the right model there and not a shortcut.
+    mcp_principal: str | None = None
+
     embedding_backend: str = "local"
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None

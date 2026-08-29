@@ -120,6 +120,12 @@ async def retrieve(
     unfiltered: list[RetrievedChunk] = []
     if count_withheld and query_vector is not None:
         async with admin_session() as session:
+            # Deliberately NOT passed `principal`: this is the baseline the
+            # withheld count is measured against, so it must stay genuinely
+            # unfiltered. Applying `coarse_predicate` here would remove exactly the
+            # rows the policy is about to deny, and the count would silently under-
+            # report every denial caused by group or clearance — reporting 0 withheld
+            # while withholding plenty, which is worse than not reporting at all.
             unfiltered = await _ann_query(
                 session,
                 embedder=embedder,
@@ -127,7 +133,6 @@ async def retrieve(
                 k=k,
                 ef_search=config.ef_search,
                 tenant_id=principal.tenant_id,
-                principal=principal,
             )
 
     async with principal_session(principal) as session:

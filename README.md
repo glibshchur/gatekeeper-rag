@@ -9,7 +9,7 @@ a compromised API process leaks documents. `gatekeeper-rag` pushes authorization
 Postgres row-level security, so the database itself refuses to return rows the caller is
 not cleared to see — and the query layer connects as a role that *cannot* bypass it.
 
-> **Status: Phase 3 of 6.** Retrieval quality is now measured: a hand-written golden set,
+> **Status: Phase 4 of 6.** Retrieval quality is now measured: a hand-written golden set,
 > a stage-by-stage ablation, hybrid search, and cross-encoder reranking. Contextual
 > retrieval and agentic multi-hop land in Phase 4. See [PROJECT_PLAN.md](PROJECT_PLAN.md)
 > for the full roadmap.
@@ -67,6 +67,44 @@ real departmental structure, chunks and embeds it locally, and loads it into Pos
 Answer *generation* is the one feature that needs an API key; without one the CLI does
 retrieval and says so.
 
+## Use it from Claude Code
+
+The repo ships a [`.mcp.json`](.mcp.json), so an MCP client in this directory picks the
+server up directly:
+
+```bash
+make mcp WHO=raj      # or edit GK_MCP_PRINCIPAL in .mcp.json
+```
+
+Three tools — `search_knowledge_base`, `get_document`, `whoami` — all going through the
+same row-level security policy as the CLI and the console, with no agent-specific code
+path. Ask the same question as two principals and the difference is visible in the answers:
+
+```text
+raj   → Searched as Raj Mehta — Backend Engineer (clearance 1).
+        3 additional match(es) exist that this principal is not authorised to read.
+        1. handbook/eba/_index.md                    internal
+        2. handbook/communication/ask-me-anything.md public
+
+mira  → Searched as Mira Lindqvist — CFO (clearance 3).
+        1. handbook/people-group/…/leave-types.md    restricted
+        2. handbook/leadership/compensation-review-conversations.md  restricted
+```
+
+Two rules the tool output follows, both about what a model will do with what you hand it
+([ADR 0009](docs/adr/0009-mcp-surface-and-one-principal-per-process.md)):
+
+- **A withheld result is a count, never an identity.** Hand a model the *title* of a
+  withheld document and it will write that title into its answer — and for restricted
+  material the title is usually the secret.
+- **`get_document` returns byte-identical responses for an unreadable path and a
+  nonexistent one.** Distinguishing them turns the tool into an oracle for enumerating the
+  corpus by probing paths.
+
+The server binds to **one principal for its lifetime**, set at launch. Unlike the console
+below, no tool takes a principal argument — so no prompt injection can ask for a different
+one.
+
 ## The console
 
 ```bash
@@ -111,6 +149,15 @@ asked as Mira Lindqvist — CFO  clearance=3 groups=all-employees, finance, exec
 ```
 
 Raj is not filtered out of a list he was shown. The row never leaves Postgres.
+
+## What Phase 4 delivers so far
+
+- **MCP server** over stdio (`make mcp`), exposing the corpus as three authorization-scoped
+  tools with no separate query path — so the red-team suite's guarantees cover it without
+  re-testing.
+- One principal per process, bound at launch; the server refuses to start on an expired
+  grant rather than starting and failing every call.
+- Withheld results reported as counts; unreadable and nonexistent paths indistinguishable.
 
 ## What Phase 3 delivers
 

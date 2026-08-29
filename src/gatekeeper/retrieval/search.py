@@ -196,7 +196,11 @@ async def unfiltered_candidates(
 ) -> list[RetrievedChunk]:
     """The top-k the ranking would return with authorization switched off, within the
     principal's tenant. Used to separate "authorization removed it" from "it ranked
-    poorly" -- a distinction the over-block metric is meaningless without."""
+    poorly" -- a distinction the over-block metric is meaningless without.
+
+    `principal` is used for its tenant and nothing else: passing it to `_ann_query` would
+    apply `coarse_predicate` and quietly re-introduce half the policy into the baseline
+    this function exists to be free of."""
     vector = embedder.encode_query(query).tolist()
     async with admin_session() as session:
         return await _ann_query(
@@ -206,7 +210,6 @@ async def unfiltered_candidates(
             k=k,
             ef_search=ef_search,
             tenant_id=principal.tenant_id,
-            principal=principal,
         )
 
 
