@@ -13,9 +13,9 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
-from gatekeeper.core.db import admin_session
+from gatekeeper.core.db import admin_session, principal_session
 from gatekeeper.core.models import Chunk, Document, Tenant
 from gatekeeper.core.principal import Clearance, Principal, Sensitivity
 from gatekeeper.llm.embeddings import Embedder, LocalOnnxEmbedder
@@ -265,3 +265,35 @@ async def test_withheld_count_ignores_other_tenants(corpus: Corpus, embedder: Em
             await session.execute(delete(Chunk).where(Chunk.tenant_id == neighbour))
             await session.execute(delete(Document).where(Document.tenant_id == neighbour))
             await session.execute(delete(Tenant).where(Tenant.id == neighbour))
+
+
+async def test_a_tiny_tenant_still_gets_its_visible_chunks(
+    corpus: Corpus, embedder: Embedder
+) -> None:
+    """Regression, and the nastiest bug in the project so far.
+
+    The ABAC predicate is a function over columns, so Postgres cannot estimate its
+    selectivity and assumes the filter is weak — which makes the HNSW index look
+    attractive. For a principal who can see two chunks out of 73,797, the graph walk
+    never encounters them and the query returns *nothing*, while a plain `SELECT` on the
+    same table in the same transaction returns both. No error, no short-return warning:
+    retrieval simply goes blind for the most restricted users.
+
+    It appeared only after migration 0007 made `authorize()` cheap enough to inline. The
+    expensive opaque version had been pushing the planner to a sequential scan, which is
+    exact, so the bug was masked by a performance problem.
+
+    The fix is an explicit `tenant_id = $1` predicate on both retrievers: btree-indexable,
+    so the planner can bound a small tenant before ranking it. Redundant for security —
+    RLS already enforces the tenant — and load-bearing for recall.
+    """
+    async with principal_session(corpus.engineer) as session:
+        plainly_visible = (
+            await session.execute(select(Chunk.id).where(Chunk.tenant_id == corpus.tenant_id))
+        ).all()
+    assert len(plainly_visible) == 2, "fixture invariant: the engineer may read two chunks"
+
+    result = await search(corpus.engineer, QUERY, embedder, k=3)
+    assert len(result.chunks) == 2, (
+        "the ANN path returned fewer chunks than the principal can plainly SELECT"
+    )

@@ -106,7 +106,21 @@ async def _ann_query(
         .order_by(distance)
         .limit(k)
     )
-    # Only needed on the admin plane, where no RLS policy is scoping the query for us.
+    # Always passed, on both planes, and it is a *performance* predicate rather than a
+    # security one -- RLS already restricts the tenant and does so whether or not this
+    # clause is present.
+    #
+    # It exists because the ABAC predicate is opaque to the planner. `authorize()` is a
+    # function over columns; Postgres cannot estimate its selectivity, so it assumes the
+    # filter is weak and reaches for the HNSW index. When the principal can actually see
+    # a tiny fraction of the corpus, the graph walk never encounters their rows and the
+    # query returns *fewer results than exist* -- measured at zero results for a
+    # principal who could plainly SELECT two matching chunks. `tenant_id = $1` is a
+    # btree-indexable predicate the planner does understand, so it can choose an exact
+    # scan of a small tenant instead of an approximate scan of a large corpus.
+    #
+    # If the explicit filter and the policy ever disagreed, the intersection is what
+    # comes back, which fails in the safe direction.
     if tenant_id is not None:
         stmt = stmt.where(Chunk.tenant_id == tenant_id)
     rows = (await session.execute(stmt)).all()
@@ -187,7 +201,12 @@ async def search(
 
     async with principal_session(principal) as session:
         chunks = await _ann_query(
-            session, embedder=embedder, query_vector=query_vector, k=k, ef_search=ef_search
+            session,
+            embedder=embedder,
+            query_vector=query_vector,
+            k=k,
+            ef_search=ef_search,
+            tenant_id=principal.tenant_id,
         )
 
         withheld: int | None = None

@@ -1,6 +1,14 @@
 # 0005 — One decision function, and deny rules as data
 
-**Status:** Accepted · **Date:** 2026-08-28 · **Phase:** 2
+**Status:** Accepted, with one claim corrected by [ADR 0007](0007-explicit-claims-not-ambient-session-state.md) · **Date:** 2026-08-28 · **Phase:** 2
+
+> **Correction.** The Consequences section below claims that collapsing deny rules
+> into a tag set via `gatekeeper.denied_tags()` means the policy lookup happens
+> "once per statement". That is false. `STABLE` prevents a function's result from
+> changing within a statement; it does not prevent the function from being *called*
+> per row. Phase 3's lexical retrieval measured the real cost at 11x, and ADR 0007
+> describes the fix. The decision recorded here — one function, deny rules as data —
+> stands; the performance reasoning did not.
 
 ## Context
 

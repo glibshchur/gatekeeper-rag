@@ -87,7 +87,7 @@ jobs:
           enable-cache: true
       - run: uv sync --all-extras
       - run: uv run alembic upgrade head
-      - name: Access model — oracle vs database, RLS, ABAC, audit chain
+      - name: Access model — oracle vs database, RLS, ABAC, audit chain, pipeline arms
         run: |
           uv run pytest -q \
             tests/unit/test_oracle.py \
@@ -95,7 +95,8 @@ jobs:
             tests/unit/test_audit.py \
             tests/integration/test_rls.py \
             tests/integration/test_abac.py \
-            tests/integration/test_audit_chain.py
+            tests/integration/test_audit_chain.py \
+            tests/integration/test_pipeline.py
       - name: Note
         run: |
           echo "The full red-team corpus (\`make redteam\`) needs an embedded corpus and" \

@@ -9,10 +9,10 @@ a compromised API process leaks documents. `gatekeeper-rag` pushes authorization
 Postgres row-level security, so the database itself refuses to return rows the caller is
 not cleared to see — and the query layer connects as a role that *cannot* bypass it.
 
-> **Status: Phase 2 of 6.** ABAC engine, chunk-level ACLs, tamper-evident audit chain,
-> adversarial test suite, and the filtered-ANN benchmark are in place. Hybrid search,
-> reranking, and the retrieval evaluation harness land in Phase 3. See
-> [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full roadmap.
+> **Status: Phase 3 of 6.** Retrieval quality is now measured: a hand-written golden set,
+> a stage-by-stage ablation, hybrid search, and cross-encoder reranking. Contextual
+> retrieval and agentic multi-hop land in Phase 4. See [PROJECT_PLAN.md](PROJECT_PLAN.md)
+> for the full roadmap.
 
 ## Results
 
@@ -21,7 +21,8 @@ not cleared to see — and the query layer connects as a role that *cannot* bypa
 | Leaks across 360 adversarial probes + 6 direct-fetch + 8 boundary probes | **0** |
 | (principal, chunk) pairs where the database and an independent oracle disagree | **0 of 442,782** |
 | Over-block rate (entitled results withheld) | **1.15%** |
-| Retrieval latency p50 / p95 | **11 ms / 24 ms** |
+| nDCG@10 on 58 hand-written questions (`dense+rerank`) | **0.796** |
+| Retrieval latency p50, dense / dense+rerank | **8 ms / 215 ms** |
 | Recall@10 vs exact brute force, `ef_search=200` | **1.000** |
 
 The authorization numbers come from [`src/gatekeeper/redteam/`](src/gatekeeper/redteam/),
@@ -30,10 +31,22 @@ spec**. Asking the database whether the database got it right proves nothing; tw
 implementations disagreeing loudly is the point. Retrieval numbers are in
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md), measured against exact brute-force ground truth.
 
-**The most useful thing that benchmark found is a problem, not a win:** below roughly 10%
-selectivity the query planner abandons the HNSW index entirely and sequentially scans, so
-the most tightly-scoped users get 79x worse latency — silently, with recall unaffected.
-See [ADR 0006](docs/adr/0006-filtered-ann-and-index-selectivity.md).
+Retrieval quality is in [`docs/ABLATION.md`](docs/ABLATION.md), measured over 58
+hand-written questions labelled against real documents — never generated from chunk text,
+which would make the eval circular and hand lexical search a win by construction.
+
+**Three of the most useful results in this project are negative**, and they are reported
+as prominently as the positive ones:
+
+- Below roughly 10% selectivity the planner abandons the HNSW index and sequentially scans,
+  so the most tightly-scoped users get 79x worse latency — silently, recall unaffected
+  ([ADR 0006](docs/adr/0006-filtered-ann-and-index-selectivity.md)).
+- **Hybrid search does not pay on this corpus** and is off by default: 0.797 against
+  `dense+rerank`'s 0.796, for 56% more latency
+  ([ADR 0008](docs/adr/0008-hybrid-search-measured-and-disabled.md)).
+- A performance fix to the ABAC predicate caused a *correctness* regression — retrieval
+  returned zero results for a principal who could plainly `SELECT` two matching rows
+  ([ADR 0007](docs/adr/0007-explicit-claims-not-ambient-session-state.md)).
 
 ---
 
@@ -97,6 +110,21 @@ asked as Mira Lindqvist — CFO  clearance=3 groups=all-employees, finance, exec
 ```
 
 Raj is not filtered out of a list he was shown. The row never leaves Postgres.
+
+## What Phase 3 delivers
+
+- **58-question golden set**, hand-written against verified documents, each labelled with
+  the principal entitled to the answer — so metrics describe the system as deployed rather
+  than an unauthorized ideal. A validation pass fails the run if any label is unreachable.
+- **Stage-by-stage ablation** where the arms differ only in a `RetrievalConfig`, never in
+  code path. Recall@k, MRR, nDCG@10, per-category breakdown, and the questions the best
+  configuration still misses.
+- **Lexical retrieval** (`tsvector`, OR-of-lexemes, `ts_rank_cd`) and **Reciprocal Rank
+  Fusion**, both under the same RLS policy as the dense path.
+- **Cross-encoder reranking** (`ms-marco-MiniLM-L-6-v2` via ONNX, CPU, no API key):
+  +6% MRR, +4% nDCG. The only unambiguous win of the phase.
+- **8x faster authorization** by passing claims as an argument instead of reading them
+  ambiently in the predicate — 797 ms → 100 ms on a lexical query.
 
 ## What Phase 2 delivers
 
@@ -174,9 +202,9 @@ rather than contrived.
 src/gatekeeper/
 ├─ core/        principals, models, RLS-aware session management
 ├─ ingest/      ACL derivation, chunking, blobs, pipeline
-├─ retrieval/   dense search · hybrid, rerank, planning (Phase 3–4)
+├─ retrieval/   dense · lexical · RRF · config-driven pipeline
 ├─ llm/         embeddings, generation, provider abstraction
-├─ evals/       filtered-ANN benchmark · retrieval harness (Phase 3)
+├─ evals/       golden set, ablation, filtered-ANN benchmark
 ├─ redteam/     independent oracle + adversarial corpus
 └─ apps/        api · worker · mcp                      (Phase 4–5)
 ```

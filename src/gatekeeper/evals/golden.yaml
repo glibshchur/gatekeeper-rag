@@ -1,0 +1,401 @@
+# ---------------------------------------------------------------------------
+# Golden retrieval set for the GitLab Handbook corpus.
+#
+# Three decisions about how this set was built, because they determine what the
+# numbers computed from it are allowed to claim:
+#
+# 1. **Hand-written, not generated from chunk text.** The tempting shortcut is to sample
+#    a chunk and turn its own sentences into a query. That makes the eval circular: the
+#    query is drawn from the document being retrieved, so lexical search wins by
+#    construction and the dense-vs-hybrid comparison measures nothing. Every question
+#    here was written by reading the corpus and asking what someone would actually type.
+#
+# 2. **Relevance is labelled at document level.** `relevant` lists document paths, not
+#    chunk ids. Chunk-level labels are more precise and vastly more expensive, and the
+#    question a user has is "did it find the right document", which is what this measures.
+#    A consequence worth knowing: Recall@10 over documents is more forgiving than
+#    Recall@10 over chunks, because ten chunks can come from fewer than ten documents.
+#
+# 3. **Every question is asked by a principal who is entitled to the answer.** Metrics
+#    are computed under that principal's authorization, so this measures the system as
+#    deployed rather than an unauthorized ideal. Questions whose answer the asker cannot
+#    reach belong in the red-team corpus, not here.
+#
+# `category: lexical` marks questions built around identifiers, acronyms, and figures --
+# the class dense retrieval is structurally bad at. They are separated out so the hybrid
+# arm's advantage can be attributed rather than just observed.
+# ---------------------------------------------------------------------------
+version: 1
+
+questions:
+  # --- finance -------------------------------------------------------------
+  - id: fin-expense-policy
+    question: What are the rules for expensing meals and travel on a business trip?
+    relevant: [handbook/finance/expenses.md]
+    asker: mira
+    category: finance
+
+  - id: fin-spending
+    question: What is the general principle for deciding whether to spend company money?
+    relevant: [handbook/finance/spending-company-money.md]
+    asker: mira
+    category: finance
+
+  - id: fin-authorization
+    question: Who has authority to approve a large purchase or sign a contract?
+    relevant: [handbook/finance/authorization-matrix.md]
+    asker: mira
+    category: finance
+
+  - id: fin-procurement
+    question: How does the procurement team handle a new vendor request?
+    relevant: [handbook/finance/procurement/_index.md]
+    asker: mira
+    category: finance
+
+  - id: fin-payroll
+    question: When is payroll processed and who do I contact about a payroll error?
+    relevant: [handbook/finance/payroll.md]
+    asker: mira
+    category: finance
+
+  - id: fin-travel-safety
+    question: What safety and security guidance applies when travelling for work?
+    relevant: [handbook/finance/travel/_index.md]
+    asker: mira
+    category: finance
+
+  - id: fin-nda
+    question: What does the mutual non-disclosure agreement with a vendor cover?
+    relevant: [handbook/finance/procurement/vendor-guidelines/mutual-non-disclosure-agreement.md]
+    asker: mira
+    category: finance
+
+  # --- compensation (restricted) -------------------------------------------
+  - id: comp-equity
+    question: How does equity compensation work and when do stock options vest?
+    relevant: [handbook/total-rewards/stock-options.md]
+    asker: mira
+    category: compensation
+
+  - id: comp-incentives
+    question: What incentive and bonus programmes exist for team members?
+    relevant: [handbook/total-rewards/incentives.md]
+    asker: mira
+    category: compensation
+
+  # --- people / HR ---------------------------------------------------------
+  - id: ppl-anti-harassment
+    question: What is the policy on harassment and how do I report it?
+    relevant: [handbook/people-group/anti-harassment.md]
+    asker: dana
+    category: people
+
+  - id: ppl-acceptable-use
+    question: What are the rules for acceptable use of company laptops and accounts?
+    relevant: [handbook/people-group/acceptable-use-policy.md]
+    asker: dana
+    category: people
+
+  - id: ppl-probation
+    question: How long is the probation period and what background screening is done?
+    relevant: [handbook/people-group/contracts-probation-periods.md]
+    asker: dana
+    category: people
+
+  - id: ppl-career
+    question: How does career development and internal mobility work?
+    relevant: [handbook/people-group/learning-and-development/career-development/_index.md]
+    asker: dana
+    category: people
+
+  - id: ppl-elevate
+    question: What is the Elevate leadership development programme?
+    relevant: [handbook/people-group/learning-and-development/elevate-programs/elevate/_index.md]
+    asker: dana
+    category: people
+
+  - id: ppl-recruitment-privacy
+    question: How is candidate personal data handled during recruitment?
+    relevant: [handbook/hiring/candidate-faq/recruitment-privacy-policy.md]
+    asker: dana
+    category: people
+
+  - id: ppl-infra-interview
+    question: What does the interview process look like for an infrastructure role?
+    relevant: [handbook/hiring/interviewing/infrastructure-interview.md]
+    asker: dana
+    category: people
+
+  # --- region-scoped -------------------------------------------------------
+  - id: reg-usa-policies
+    question: What employment policies apply to team members employed by the US entity?
+    relevant: [handbook/people-policies/inc-usa.md]
+    asker: dana
+    category: region
+
+  - id: reg-india-harassment
+    question: What is the India entity policy against sexual harassment?
+    relevant: [handbook/people-policies/india-ltd/_index.md]
+    asker: dana
+    category: region
+
+  - id: reg-netherlands-benefits
+    question: What benefits are provided to team members employed in the Netherlands?
+    relevant: [handbook/total-rewards/benefits/general-and-entity-benefits/bv-benefits-netherlands.md]
+    asker: dana
+    category: region
+
+  - id: reg-ireland-benefits
+    question: What benefits apply to the Ireland entity?
+    relevant: [handbook/total-rewards/benefits/general-and-entity-benefits/gitlab-ireland-ltd.md]
+    asker: dana
+    category: region
+
+  - id: reg-global-expansion
+    question: How does the company decide where to open a new legal entity for hiring?
+    relevant: [handbook/total-rewards/benefits/general-and-entity-benefits/global-expansion.md]
+    asker: dana
+    category: region
+
+  # --- security ------------------------------------------------------------
+  - id: sec-overview
+    question: What is the security team's mission and how is security organised?
+    relevant: [handbook/security/_index.md]
+    asker: sam
+    category: security
+
+  - id: sec-operations
+    question: What does the security operations team do day to day?
+    relevant: [handbook/security/security-operations/_index.md]
+    asker: sam
+    category: security
+
+  - id: sec-red-team-roe
+    question: What are the rules of engagement for red team exercises?
+    relevant: [handbook/security/security-operations/red-team/how-we-operate/rules-of-engagement.md]
+    asker: sam
+    category: security
+
+  - id: sec-purple-team
+    question: How does purple teaming work here?
+    relevant: [handbook/security/security-operations/red-team/purple-teaming/_index.md]
+    asker: sam
+    category: security
+
+  - id: sec-vuln-management
+    question: How are vulnerabilities triaged and managed?
+    relevant:
+      - handbook/engineering/development/sec/security-factory/vulnerability-management/_index.md
+    asker: sam
+    category: security
+
+  - id: sec-appsec
+    question: What does the application security testing sub-department cover?
+    relevant: [handbook/engineering/development/sec/secure/_index.md]
+    asker: sam
+    category: security
+
+  - id: sec-supply-chain
+    question: How is software supply chain security handled?
+    relevant:
+      - handbook/engineering/development/sec/software-supply-chain-security/_index.md
+    asker: sam
+    category: security
+
+  # --- engineering ---------------------------------------------------------
+  - id: eng-incident-mgmt
+    question: What is the process for managing a production incident?
+    relevant:
+      - handbook/engineering/incident-management.md
+      - handbook/engineering/infrastructure-platforms/incident-management/_index.md
+    asker: raj
+    category: engineering
+
+  - id: eng-incident-followup
+    question: What has to happen after an incident is resolved?
+    relevant:
+      - handbook/engineering/infrastructure-platforms/incident-management/incident-follow-ups.md
+    asker: raj
+    category: engineering
+
+  - id: eng-oncall-handoff
+    question: How should an on-call engineer hand off at the end of a shift?
+    relevant: [handbook/engineering/development/sec/oncall/handoff-and-continuity.md]
+    asker: raj
+    category: engineering
+
+  - id: eng-oncall-faq
+    question: What are the common questions about tier 2 on-call?
+    relevant: [handbook/engineering/development/sec/oncall/faq.md]
+    asker: raj
+    category: engineering
+
+  - id: eng-code-review-static
+    question: How does the static analysis group run code review?
+    relevant: [handbook/engineering/development/sec/security-factory/code-scanning/code_review.md]
+    asker: raj
+    category: engineering
+
+  - id: eng-k8s-comms
+    question: How does GitLab communicate with a Kubernetes cluster?
+    relevant:
+      - handbook/engineering/architecture/design-documents/gitlab_to_kubernetes_communication/_index.md
+    asker: raj
+    category: engineering
+
+  - id: eng-authentication
+    question: Which group owns authentication and what does it cover?
+    relevant: [handbook/engineering/development/sec/security-platform/authentication/_index.md]
+    asker: raj
+    category: engineering
+
+  - id: eng-dev-onboarding
+    question: How do I onboard into the developer experience team?
+    relevant:
+      - handbook/engineering/infrastructure-platforms/developer-experience/onboarding.md
+    asker: raj
+    category: engineering
+
+  # --- support -------------------------------------------------------------
+  - id: sup-customer-calls
+    question: How should a support engineer run a customer call?
+    relevant: [handbook/support/workflows/customer_calls.md]
+    asker: raj
+    category: support
+
+  - id: sup-zendesk
+    question: What are the basics of working a Zendesk ticket?
+    relevant: [handbook/support/workflows/zendesk-ticket-basics.md]
+    asker: raj
+    category: support
+
+  - id: sup-promotion
+    question: How is a support engineer considered for promotion?
+    relevant: [handbook/support/managers/promoting-a-support-team-member.md]
+    asker: raj
+    category: support
+
+  - id: sup-cross-region
+    question: How do support regions coordinate handover across time zones?
+    relevant: [handbook/support/workflows/regions/cross_region.md]
+    asker: raj
+    category: support
+
+  - id: sup-ai-tools
+    question: How does support decide which AI tool to use?
+    relevant: [handbook/support/ai/ai-tool-selection.md]
+    asker: raj
+    category: support
+
+  - id: sup-feedback
+    question: How should a manager respond to a poor customer satisfaction score?
+    relevant: [handbook/support/workflows/how-to-respond-to-feedback.md]
+    asker: raj
+    category: support
+
+  # --- culture / public ----------------------------------------------------
+  - id: cul-values
+    question: What are the company values?
+    relevant: [handbook/values/_index.md]
+    asker: guest
+    category: culture
+
+  - id: cul-handbook-first
+    question: Why does the company insist on a handbook-first approach to communication?
+    relevant: [handbook/company/culture/all-remote/handbook-first.md]
+    asker: guest
+    category: culture
+
+  - id: cul-remote-benefits
+    question: What are the benefits of working at an all-remote company?
+    relevant: [handbook/company/culture/all-remote/remote-benefits.md]
+    asker: guest
+    category: culture
+
+  - id: cul-inclusive
+    question: What does being inclusive mean in practice here?
+    relevant: [handbook/company/culture/inclusion/being-inclusive.md]
+    asker: guest
+    category: culture
+
+  - id: cul-communication
+    question: What are the norms for internal communication?
+    relevant: [handbook/communication/_index.md]
+    asker: guest
+    category: culture
+
+  - id: cul-working-travel
+    question: What should I consider if I want to work while travelling?
+    relevant: [handbook/company/culture/all-remote/working-while-traveling.md]
+    asker: guest
+    category: culture
+
+  # --- executive / legal ---------------------------------------------------
+  - id: exec-board
+    question: How is the board of directors structured and governed?
+    relevant: [handbook/board-meetings/_index.md]
+    asker: mira
+    category: executive
+
+  - id: exec-ceo-shadow
+    question: What is the CEO shadow programme and how do you join it?
+    relevant: [handbook/ceo/shadow.md]
+    asker: mira
+    category: executive
+
+  # --- lexical: identifiers, acronyms, figures ------------------------------
+  # Dense retrieval is structurally weak here. Separated out so the hybrid arm's
+  # advantage can be attributed rather than merely observed.
+  - id: lex-star
+    question: What is the STAR support ticket attention request process?
+    relevant: [handbook/support/internal-support/support-ticket-attention-requests.md]
+    asker: raj
+    category: lexical
+
+  - id: lex-piaa
+    question: What is PIAA and when does a team member sign one?
+    relevant: [handbook/people-group/contracts-probation-periods.md]
+    asker: dana
+    category: lexical
+
+  - id: lex-customersdot
+    question: What admin support tools are available in CustomersDot?
+    relevant:
+      - handbook/support/license-and-renewals/workflows/customersdot/support_tools.md
+    asker: raj
+    category: lexical
+
+  - id: lex-imoc
+    question: What is the IMOC response team for GitLab Dedicated?
+    relevant:
+      - handbook/engineering/infrastructure-platforms/gitlab-dedicated/incident-management/imoc/index.md
+    asker: raj
+    category: lexical
+
+  - id: lex-sbom
+    question: How does the dependency scanning analyzer use the SBOM scan API?
+    relevant:
+      - handbook/engineering/architecture/design-documents/dependency_scanning_analyzer/decisions/002_vulnerability_scanning.md
+    asker: raj
+    category: lexical
+
+  - id: lex-secret-push
+    question: How is secret push protection performance tested?
+    relevant:
+      - handbook/engineering/development/sec/security-factory/secret-detection/runbooks/secret-push-protection-performance-testing.md
+    asker: raj
+    category: lexical
+
+  - id: lex-license-errors
+    question: How do I troubleshoot a license activation error on a self-managed instance?
+    relevant:
+      - handbook/support/license-and-renewals/workflows/self-managed/troubleshoot_license_upload_issues.md
+    asker: raj
+    category: lexical
+
+  - id: lex-vue3-router
+    question: What is the Vue 3 Router 4 test compatibility task group working on?
+    relevant: [handbook/company/working-groups/task-groups/vue3-router4-tests.md]
+    asker: guest
+    category: lexical

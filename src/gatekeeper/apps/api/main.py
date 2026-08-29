@@ -31,7 +31,8 @@ from gatekeeper.core.models import Chunk, Document
 from gatekeeper.ingest import seed
 from gatekeeper.llm.embeddings import Embedder, build_embedder
 from gatekeeper.llm.generation import Generator, build_generator
-from gatekeeper.retrieval.search import search
+from gatekeeper.llm.rerank import CrossEncoderReranker
+from gatekeeper.retrieval.pipeline import DEFAULT_CONFIG, retrieve
 
 STATIC = Path(__file__).parent / "static"
 
@@ -47,6 +48,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         build_embedder, settings.embedding_backend, settings.openai_api_key
     )
     _state["generator"] = build_generator(settings.openai_api_key, settings.anthropic_api_key)
+    # The console should show the pipeline that actually ships, reranker included, so
+    # what a reader sees here is what a deployment would return.
+    _state["reranker"] = await asyncio.to_thread(CrossEncoderReranker)
     yield
     await dispose_engines()
 
@@ -60,6 +64,10 @@ def embedder() -> Embedder:
 
 def generator() -> Generator | None:
     return _state.get("generator")
+
+
+def reranker() -> CrossEncoderReranker | None:
+    return _state.get("reranker")
 
 
 class AskRequest(BaseModel):
@@ -149,8 +157,14 @@ async def ask(request: AskRequest) -> dict[str, Any]:
             )
             continue
 
-        found = await search(
-            principal, request.question, embedder(), k=request.k, count_withheld=True
+        found = await retrieve(
+            principal,
+            request.question,
+            embedder(),
+            config=DEFAULT_CONFIG,
+            k=request.k,
+            reranker=reranker(),
+            count_withheld=True,
         )
 
         answer: dict[str, Any] | None = None
@@ -194,6 +208,7 @@ async def ask(request: AskRequest) -> dict[str, Any]:
         "question": request.question,
         "generation_available": generator() is not None,
         "embedding_model": embedder().space.model,
+        "pipeline": DEFAULT_CONFIG.description,
         "results": results,
     }
 

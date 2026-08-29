@@ -271,6 +271,78 @@ def index_stats() -> None:
     console.print(table)
 
 
+@app.command("eval")
+def eval_retrieval(
+    k: int = 10,
+    backend: str = "",
+    rerank: Annotated[bool, typer.Option(help="include cross-encoder arms")] = True,
+    out: Annotated[str, typer.Option(help="write the markdown report here")] = "docs/ABLATION.md",
+) -> None:
+    """Run the retrieval ablation over the golden set."""
+    from pathlib import Path
+
+    from gatekeeper.evals import ablation as ablation_mod
+    from gatekeeper.evals.harness import load_golden, validate_golden
+
+    settings = get_settings()
+    embedder = build_embedder(backend or settings.embedding_backend, settings.openai_api_key)
+
+    reranker = None
+    if rerank:
+        from gatekeeper.llm.rerank import CrossEncoderReranker
+
+        console.print("[dim]loading cross-encoder…[/dim]")
+        reranker = CrossEncoderReranker()
+
+    async def go() -> tuple[ablation_mod.Ablation, list[str]]:
+        questions = load_golden()
+        problems = await validate_golden(questions)
+        if problems:
+            return ablation_mod.Ablation([], k, 0, 0), problems
+        async with admin_session() as session:
+            corpus = (await session.execute(select(func.count(Chunk.id)))).scalar_one()
+        result = await ablation_mod.run(
+            questions, embedder, k=k, reranker=reranker, corpus_chunks=corpus
+        )
+        return result, []
+
+    result, problems = _run(go())
+    if problems:
+        console.print("[bold red]The golden set does not validate:[/bold red]")
+        for line in problems:
+            console.print(f"  {line}")
+        raise typer.Exit(1)
+
+    table = Table(
+        title=f"Retrieval ablation ({result.question_count} questions)", title_justify="left"
+    )
+    for col in ("configuration", f"hit@{k}", f"recall@{k}", "MRR", f"nDCG@{k}", "p50"):
+        table.add_column(col, justify="left" if col == "configuration" else "right")
+    best = max(r.ndcg for r in result.reports)
+    for report in result.reports:
+        ndcg = (
+            f"[bold green]{report.ndcg:.3f}[/bold green]"
+            if report.ndcg == best
+            else f"{report.ndcg:.3f}"
+        )
+        table.add_row(
+            report.config.name,
+            f"{report.hit_rate:.3f}",
+            f"{report.recall:.3f}",
+            f"{report.mrr:.3f}",
+            ndcg,
+            f"{report.p50_ms:.0f} ms",
+        )
+    console.print(table)
+
+    path = Path(out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        ablation_mod.to_markdown(result, embedder.space.model, reranker.model if reranker else None)
+    )
+    console.print(f"\n[dim]written to {path}[/dim]")
+
+
 @app.command("bench")
 def bench(
     k: int = 10,

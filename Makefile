@@ -41,6 +41,9 @@ ask: ## Ask a question as a principal, e.g. make ask Q="expense limit?" WHO=dana
 reacl: ## Re-apply corpus/acl_rules.yaml to existing chunks (no re-embedding)
 	uv run gatekeeper index reacl
 
+eval: ## Run the retrieval ablation over the golden set; writes docs/ABLATION.md
+	uv run gatekeeper eval
+
 redteam: ## Run the adversarial corpus; exits non-zero on any leak
 	uv run gatekeeper redteam
 
@@ -73,4 +76,4 @@ test: ## Unit tests only (no docker required)
 test-all: ## Full suite including RLS integration tests (needs docker)
 	uv run pytest -q
 
-.PHONY: help install up down nuke migrate fetch seed index repair reacl stats redteam bench verify-audit ask ui whoami bootstrap lint fmt test test-all
+.PHONY: help install up down nuke migrate fetch seed index repair reacl stats eval redteam bench verify-audit ask ui whoami bootstrap lint fmt test test-all

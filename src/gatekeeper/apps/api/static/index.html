@@ -246,8 +246,8 @@ function render(data) {
     </div>`).join("") + `</div>`;
 
   el("foot").textContent = data.generation_available
-    ? `Embeddings: ${data.embedding_model}. Every result was filtered by the database, not by this page.`
-    : `Embeddings: ${data.embedding_model}. Retrieval only — set GK_OPENAI_API_KEY or GK_ANTHROPIC_API_KEY and run "uv sync --extra providers" to synthesise answers.`;
+    ? `Pipeline: ${data.pipeline} · ${data.embedding_model}. Every result was filtered by the database, not by this page.`
+    : `Pipeline: ${data.pipeline} · ${data.embedding_model}. Retrieval only — set GK_OPENAI_API_KEY or GK_ANTHROPIC_API_KEY and run "uv sync --extra providers" to synthesise answers.`;
 }
 
 el("q").onsubmit = async (e) => {
