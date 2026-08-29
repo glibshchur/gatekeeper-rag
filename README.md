@@ -38,8 +38,9 @@ which would make the eval circular and hand lexical search a win by construction
 **Three of the most useful results in this project are negative**, and they are reported
 as prominently as the positive ones:
 
-- Below roughly 10% selectivity the planner abandons the HNSW index and sequentially scans,
-  so the most tightly-scoped users get 79x worse latency — silently, recall unaffected
+- The selectivity cliff — 79x worse latency for the most restricted users, silently — is
+  **fixed**, 79 ms → 2.0 ms. But 13x of the 40x came from a change made for an unrelated
+  reason, and this ADR's own proposed fix was on the wrong axis
   ([ADR 0006](docs/adr/0006-filtered-ann-and-index-selectivity.md)).
 - **Hybrid search does not pay on this corpus** and is off by default: 0.797 against
   `dense+rerank`'s 0.796, for 56% more latency

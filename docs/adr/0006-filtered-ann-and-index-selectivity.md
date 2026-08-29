@@ -1,6 +1,6 @@
 # 0006 — Filtered ANN: the access predicate can cost you the vector index
 
-**Status:** Accepted · **Date:** 2026-08-28 · **Phase:** 2
+**Status:** Resolved in Phase 3 — see [Resolution](#resolution) · **Date:** 2026-08-28 · **Phase:** 2
 
 ## Context
 
@@ -67,3 +67,54 @@ in the module docstring because either would have shipped as a finding:
 
 Recall of 1.000 at every selectivity should have been suspicious on sight. A benchmark
 that reports exactly what you expected is not evidence.
+
+---
+
+## Resolution
+
+**Date:** 2026-08-29 · **Phase:** 3
+
+The cliff is gone: 79 ms → 2.0 ms for the most restricted principal, a 40x improvement.
+Two things worth recording, because neither is what this ADR predicted.
+
+**The proposed fix was on the wrong axis.** This record proposed *per-tenant* partial
+indexes. The cliff is **intra**-tenant — `guest` and `mira` share a tenant and differ 18x
+in what they can read — so a per-tenant index would have helped neither of them. The axis
+that works is `sensitivity`: four values, present in the policy verbatim, and correlated
+with selectivity because the most restricted principals are exactly the ones limited to
+`public`.
+
+**Most of the fix was an accident.** Isolated by downgrading `authorize()` and re-running
+against the same corpus and queries:
+
+| `authorize()` form | guest plan | guest p50 | raj p50 |
+|---|---|---:|---:|
+| Phase 2: `STABLE`, called per row | `Parallel Seq Scan` | 79.0 ms | 2.2 ms |
+| [ADR 0007](0007-explicit-claims-not-ambient-session-state.md): `IMMUTABLE`, inlinable | `HNSW (full)` | 6.1 ms | 2.2 ms |
+| + `coarse_predicate()` & partial index (0008) | `HNSW (public partial)` | **2.0 ms** | 2.2 ms |
+
+**13x of the 40x came from ADR 0007**, which was written to fix an unrelated 11x slowdown
+on lexical queries. An opaque `STABLE` function gives the planner a default selectivity
+guess that made the sequential scan look cheap; making the predicate `IMMUTABLE` and
+inlinable let it fold the clauses into the query's quals and estimate them properly. The
+cliff and the lexical slowdown were the same root cause — a predicate the planner could
+not see into — and neither diagnosis noticed that at the time.
+
+The remaining 3x is deliberate: `coarse_predicate()` restates two of the policy's own
+clauses in the query (`min_clearance <= clearance`, and `sensitivity = 'public' OR
+allowed_groups && groups`) so the planner can index them, and migration 0008 adds partial
+HNSW graphs for the `public` and `public+internal` tiers. The public graph is 4.4 MB
+against 81 MB for the full one.
+
+Recall is unaffected: 1.000 at the default `ef_search=200` for every principal, against
+exact brute-force ground truth. Authorization is unaffected: 0 leaks and 442,806
+(principal, chunk) pairs still reconciling against the independent oracle.
+`test_the_coarse_predicate_removes_nothing_the_policy_permits` pins the superset property
+directly, by comparing result sets with and without the coarse clauses rather than by
+reasoning about which clauses are safe to restate.
+
+**The lesson worth keeping.** Two separate performance investigations, months apart in
+narrative time, turned out to share a root cause that neither had named. The thing that
+connected them was measuring the *plan*, not the latency — ADR 0006's original diagnosis
+was correct precisely because it ran `EXPLAIN` instead of inferring from timings, and this
+resolution was possible because the benchmark now records the chosen plan on every row.

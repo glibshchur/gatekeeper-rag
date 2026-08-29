@@ -127,6 +127,7 @@ async def retrieve(
                 k=k,
                 ef_search=config.ef_search,
                 tenant_id=principal.tenant_id,
+                principal=principal,
             )
 
     async with principal_session(principal) as session:
@@ -140,12 +141,17 @@ async def retrieve(
                     k=config.candidates,
                     ef_search=config.ef_search,
                     tenant_id=principal.tenant_id,
+                    principal=principal,
                 )
             )
         if config.lexical:
             rankings.append(
                 await lexical_topk(
-                    session, query, k=config.candidates, tenant_id=principal.tenant_id
+                    session,
+                    query,
+                    k=config.candidates,
+                    tenant_id=principal.tenant_id,
+                    principal=principal,
                 )
             )
 

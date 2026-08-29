@@ -368,7 +368,34 @@ def bench(
 
     results, corpus = _run(go())
 
-    table = Table(title=f"Filtered-ANN recall@{k}", title_justify="left")
+    before_after = Table(title="Selectivity cliff: coarse predicate off → on", title_justify="left")
+    for col in ("principal", "selectivity", "plan (before)", "p50", "plan (after)", "p50"):
+        before_after.add_column(
+            col, justify="left" if "plan" in col or col == "principal" else "right"
+        )
+    befores = {m.principal: m for m in results if not m.coarse}
+    afters = {
+        m.principal: m
+        for m in results
+        if m.coarse and m.scan_mode == "relaxed_order" and m.ef_search == filtered_ann.DEFAULT_EF
+    }
+    for handle, b in befores.items():
+        a = afters.get(handle)
+        if a is None:
+            continue
+        gain = b.p50_ms / a.p50_ms if a.p50_ms else 0.0
+        before_after.add_row(
+            handle,
+            f"{b.selectivity:.1%}",
+            b.plan,
+            f"{b.p50_ms:.0f} ms",
+            a.plan,
+            f"[green]{a.p50_ms:.0f} ms[/green]" if gain > 1.5 else f"{a.p50_ms:.0f} ms",
+        )
+    console.print(before_after)
+    console.print()
+
+    table = Table(title=f"Filtered-ANN recall@{k} (coarse predicate on)", title_justify="left")
     for col in (
         "principal",
         "selectivity",
@@ -381,6 +408,8 @@ def bench(
     ):
         table.add_column(col, justify="left" if col in ("principal", "iterative_scan") else "right")
     for m in results:
+        if not m.coarse:
+            continue
         recall = (
             f"[green]{m.recall:.3f}[/green]"
             if m.recall >= 0.99
@@ -402,7 +431,11 @@ def bench(
 
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(filtered_ann.to_markdown(results, k, corpus))
+    path.write_text(
+        filtered_ann.to_markdown(results, k, corpus)
+        + "\n"
+        + filtered_ann.before_after_markdown(results, k)
+    )
     console.print(f"\n[dim]written to {path}[/dim]")
 
 

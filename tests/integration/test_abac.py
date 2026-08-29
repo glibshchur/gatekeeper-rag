@@ -239,3 +239,42 @@ async def test_database_and_oracle_agree_on_every_pair(fx: Fx) -> None:
         if actual != expected:
             disagreements.append(f"{handle}: database={sorted(actual)} oracle={sorted(expected)}")
     assert not disagreements, "\n".join(disagreements)
+
+
+async def test_the_coarse_predicate_removes_nothing_the_policy_permits(fx: Fx) -> None:
+    """The safety property behind the ADR 0006 fix.
+
+    `coarse_predicate()` restates two of the policy's clauses in the query so the planner
+    can estimate and index them. That is only sound if the coarse predicate is *implied by*
+    the policy — a superset. If it were ever narrower, queries would silently drop rows the
+    principal is entitled to, and the failure would look like a retrieval quality problem
+    rather than an authorization bug.
+
+    Comparing the two result sets directly is the strongest available check: it does not
+    depend on anyone reasoning correctly about which clauses are safe to restate.
+    """
+    from gatekeeper.retrieval.search import coarse_predicate
+
+    for handle, principal in fx.people.items():
+        if principal.is_expired:
+            continue
+        async with principal_session(principal) as session:
+            policy_only = {
+                row[0]
+                for row in await session.execute(
+                    select(Document.title).where(Document.source == "test")
+                )
+            }
+            with_coarse = {
+                row[0]
+                for row in await session.execute(
+                    select(Document.title)
+                    .where(Document.source == "test")
+                    .where(*coarse_predicate(Document, principal))
+                )
+            }
+        assert with_coarse == policy_only, (
+            f"{handle}: the coarse predicate changed the result set "
+            f"(lost {sorted(policy_only - with_coarse)}, "
+            f"gained {sorted(with_coarse - policy_only)})"
+        )

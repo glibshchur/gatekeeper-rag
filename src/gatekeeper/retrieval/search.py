@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 
 from gatekeeper.core import audit as audit_log
 from gatekeeper.core.db import admin_session, principal_session
@@ -68,6 +68,49 @@ class SearchResult:
     """
 
 
+def coarse_predicate(model: type[Chunk] | type[Document], principal: Principal) -> list[Any]:
+    """Two of the RLS policy's own clauses, restated in the query.
+
+    This is the fix for the selectivity cliff in ADR 0006. The policy is a function call,
+    `gatekeeper.authorize(...)`, and Postgres cannot estimate a function's selectivity —
+    it assumes the filter is weak, so it reaches for the HNSW index even when the
+    principal can read 5% of the corpus. The graph walk then spends its budget on rows
+    the policy will discard.
+
+    The conditions returned here are **not a second access model**. They are literally two
+    clauses lifted out of `authorize()`:
+
+        min_clearance <= clearance
+        sensitivity = 'public' OR allowed_groups && groups
+
+    Because the policy already requires both, adding them to the query removes nothing the
+    policy would have permitted — the coarse predicate is implied by the policy, so it is a
+    superset by construction. What it changes is what the planner can *see*: `min_clearance`
+    is a small integer column and `allowed_groups` has a GIN index, so selectivity becomes
+    estimable and the planner can choose a cheap filtered scan over a small set instead of
+    an approximate scan over everything.
+
+    For a principal with no groups the OR collapses to `sensitivity = 'public'` — `&& '{}'`
+    is always false — which is also the form that matches the partial HNSW index from
+    migration 0008.
+
+    The remaining policy clauses (tenant, expiry, deny rules, need-to-know, jurisdiction)
+    stay only in the policy. They are either not usefully indexable or not safe to
+    approximate, and restating them would buy nothing.
+    """
+    conditions: list[Any] = [model.min_clearance <= int(principal.clearance)]
+    if principal.groups:
+        conditions.append(
+            or_(
+                model.sensitivity == "public",
+                model.allowed_groups.overlap(principal.groups),
+            )
+        )
+    else:
+        conditions.append(model.sensitivity == "public")
+    return conditions
+
+
 async def _ann_query(
     session: AsyncSession,
     *,
@@ -76,6 +119,7 @@ async def _ann_query(
     k: int,
     ef_search: int,
     tenant_id: UUID | None = None,
+    principal: Principal | None = None,
 ) -> list[RetrievedChunk]:
     space = embedder.space
     column = getattr(Chunk, space.column)
@@ -123,6 +167,8 @@ async def _ann_query(
     # comes back, which fails in the safe direction.
     if tenant_id is not None:
         stmt = stmt.where(Chunk.tenant_id == tenant_id)
+    if principal is not None:
+        stmt = stmt.where(*coarse_predicate(Chunk, principal))
     rows = (await session.execute(stmt)).all()
     return [
         RetrievedChunk(
@@ -160,6 +206,7 @@ async def unfiltered_candidates(
             k=k,
             ef_search=ef_search,
             tenant_id=principal.tenant_id,
+            principal=principal,
         )
 
 
@@ -207,6 +254,7 @@ async def search(
             k=k,
             ef_search=ef_search,
             tenant_id=principal.tenant_id,
+            principal=principal,
         )
 
         withheld: int | None = None

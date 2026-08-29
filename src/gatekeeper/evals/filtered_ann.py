@@ -41,12 +41,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select, text
 
 from gatekeeper.core.db import principal_session, unprepared_engine
 from gatekeeper.core.models import Chunk
+from gatekeeper.retrieval.search import coarse_predicate
 
 if TYPE_CHECKING:
     from gatekeeper.core.principal import Principal
@@ -57,6 +58,7 @@ if TYPE_CHECKING:
 # `strict_order` preserves ordering at more cost.
 SCAN_MODES = ("off", "relaxed_order", "strict_order")
 EF_VALUES = (40, 100, 200, 400)
+DEFAULT_EF = 200
 
 QUERIES = [
     "How much can I expense for a meal on a business trip?",
@@ -83,6 +85,8 @@ class Measurement:
     p50_ms: float
     p95_ms: float
     exact_p50_ms: float
+    coarse: bool = True
+    plan: str = ""
 
 
 async def _selectivity(principal: Principal, corpus_size: int) -> float:
@@ -116,6 +120,22 @@ async def _exact_topk(
     return [str(r.id) for r in rows], (time.monotonic() - started) * 1000
 
 
+def _approx_stmt(
+    principal: Principal, vector: list[float], embedder: Embedder, k: int, coarse: bool
+) -> Any:
+    column = getattr(Chunk, embedder.space.column)
+    stmt = (
+        select(Chunk.id)
+        .where(column.is_not(None), Chunk.embedding_model == embedder.space.model)
+        .where(Chunk.tenant_id == principal.tenant_id)
+        .order_by(column.cosine_distance(vector))
+        .limit(k)
+    )
+    if coarse:
+        stmt = stmt.where(*coarse_predicate(Chunk, principal))
+    return stmt
+
+
 async def _approx_topk(
     principal: Principal,
     vector: list[float],
@@ -123,21 +143,49 @@ async def _approx_topk(
     k: int,
     scan_mode: str,
     ef_search: int,
+    coarse: bool = True,
 ) -> tuple[list[str], float]:
-    column = getattr(Chunk, embedder.space.column)
     started = time.monotonic()
     async with principal_session(principal, unprepared_engine()) as session:
         await session.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
         await session.execute(text(f"SET LOCAL hnsw.iterative_scan = '{scan_mode}'"))
-        rows = (
-            await session.execute(
-                select(Chunk.id)
-                .where(column.is_not(None), Chunk.embedding_model == embedder.space.model)
-                .order_by(column.cosine_distance(vector))
-                .limit(k)
-            )
-        ).all()
+        rows = (await session.execute(_approx_stmt(principal, vector, embedder, k, coarse))).all()
     return [str(r.id) for r in rows], (time.monotonic() - started) * 1000
+
+
+async def _plan_of(
+    principal: Principal,
+    vector: list[float],
+    embedder: Embedder,
+    k: int,
+    scan_mode: str,
+    ef_search: int,
+    coarse: bool,
+) -> str:
+    """The scan node the planner actually chose.
+
+    The first version of this benchmark reported latency and left the plan to be inferred,
+    which is how a cached sequential-scan plan passed for an index scan for two rounds.
+    Reading it from EXPLAIN makes the claim checkable.
+    """
+    stmt = _approx_stmt(principal, vector, embedder, k, coarse)
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    async with principal_session(principal, unprepared_engine()) as session:
+        await session.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
+        await session.execute(text(f"SET LOCAL hnsw.iterative_scan = '{scan_mode}'"))
+        rows = (await session.execute(text("EXPLAIN " + compiled))).all()
+    for row in rows:
+        line = str(row[0]).strip()
+        if "Scan" in line:
+            node = line.lstrip("-> ").split("  (cost")[0]
+            if "using ix_chunks_emb384_public" in node:
+                return "HNSW (public partial)"
+            if "using ix_chunks_emb384_internal" in node:
+                return "HNSW (internal partial)"
+            if "hnsw" in node:
+                return "HNSW (full)"
+            return node
+    return "unknown"
 
 
 def _percentile(values: list[float], q: float) -> float:
@@ -173,40 +221,53 @@ async def run(
             exact_latencies.append(elapsed)
         exact_p50 = _percentile(exact_latencies, 0.5)
 
-        for scan_mode in SCAN_MODES:
-            for ef_search in EF_VALUES:
-                # Warmup: the ground-truth pass above flushed the buffer pool.
-                for query in probes:
-                    await _approx_topk(principal, vectors[query], embedder, k, scan_mode, ef_search)
+        # The sweep runs with the coarse predicate on (production behaviour). The
+        # `coarse=False` pass at default settings is the before-and-after for ADR 0006,
+        # measured on the same principal, corpus and queries within one run.
+        for coarse in (False, True):
+            modes = SCAN_MODES if coarse else ("relaxed_order",)
+            efs = EF_VALUES if coarse else (DEFAULT_EF,)
+            for scan_mode in modes:
+                for ef_search in efs:
+                    # Warmup: the ground-truth pass above flushed the buffer pool.
+                    for query in probes:
+                        await _approx_topk(
+                            principal, vectors[query], embedder, k, scan_mode, ef_search, coarse
+                        )
 
-                recalls: list[float] = []
-                latencies: list[float] = []
-                short = 0
-                for query in probes:
-                    ids, elapsed = await _approx_topk(
-                        principal, vectors[query], embedder, k, scan_mode, ef_search
-                    )
-                    latencies.append(elapsed)
-                    expected = truth[query]
-                    if not expected:
-                        continue
-                    if len(ids) < min(k, len(expected)):
-                        short += 1
-                    recalls.append(len(set(ids) & set(expected)) / len(expected))
+                    recalls: list[float] = []
+                    latencies: list[float] = []
+                    short = 0
+                    for query in probes:
+                        ids, elapsed = await _approx_topk(
+                            principal, vectors[query], embedder, k, scan_mode, ef_search, coarse
+                        )
+                        latencies.append(elapsed)
+                        expected = truth[query]
+                        if not expected:
+                            continue
+                        if len(ids) < min(k, len(expected)):
+                            short += 1
+                        recalls.append(len(set(ids) & set(expected)) / len(expected))
 
-                results.append(
-                    Measurement(
-                        principal=handle,
-                        selectivity=selectivity,
-                        scan_mode=scan_mode,
-                        ef_search=ef_search,
-                        recall=sum(recalls) / len(recalls) if recalls else 0.0,
-                        short_returns=short,
-                        p50_ms=_percentile(latencies, 0.5),
-                        p95_ms=_percentile(latencies, 0.95),
-                        exact_p50_ms=exact_p50,
+                    plan = await _plan_of(
+                        principal, vectors[probes[0]], embedder, k, scan_mode, ef_search, coarse
                     )
-                )
+                    results.append(
+                        Measurement(
+                            principal=handle,
+                            selectivity=selectivity,
+                            scan_mode=scan_mode,
+                            ef_search=ef_search,
+                            recall=sum(recalls) / len(recalls) if recalls else 0.0,
+                            short_returns=short,
+                            p50_ms=_percentile(latencies, 0.5),
+                            p95_ms=_percentile(latencies, 0.95),
+                            exact_p50_ms=exact_p50,
+                            coarse=coarse,
+                            plan=plan,
+                        )
+                    )
     return results
 
 
@@ -225,25 +286,38 @@ def to_markdown(results: list[Measurement], k: int, corpus_size: int) -> str:
         "",
         "## Findings",
         "",
-        "**1. Below a selectivity threshold the planner abandons the vector index.** This is",
-        "the headline, and it is not a tuning problem. At 5.2% selectivity Postgres estimates",
-        "the filter will leave ~1 row and chooses a parallel sequential scan; at 84.6% it uses",
-        "the HNSW index. Confirmed by `EXPLAIN ANALYZE`, not inferred from timings:",
+        "**1. The selectivity cliff is fixed, and mostly not by the thing built to fix it.**",
         "",
-        "| principal | selectivity | plan | time |",
-        "|---|---:|---|---:|",
-        "| guest | 5.2% | `Parallel Seq Scan on chunks` | 69 ms |",
-        "| raj | 84.6% | `Index Scan using ix_chunks_embedding_384_hnsw` | 0.9 ms |",
+        "Phase 2 measured a 79x latency cliff: at 5.2% selectivity Postgres chose a parallel",
+        "sequential scan, at 84.6% it used the HNSW index. The access policy, not the query,",
+        "decided which. Recall stayed at 1.000 throughout -- a sequential scan is exact -- so",
+        "nothing in the results hinted that anything had changed.",
         "",
-        "A 79x latency cliff, triggered by the access policy rather than by the query, with",
-        "no error and no warning. Recall stays at 1.000 the whole way down -- a sequential",
-        "scan is exact -- so nothing in the results hints that anything changed. Any tenant",
-        "whose users are tightly scoped falls off this cliff and simply runs slowly forever.",
+        "Isolating the cause by downgrading and re-running against the same corpus:",
         "",
-        "The fix is to make the filter something the index can exploit rather than something",
-        "applied to its output: partial HNSW indexes per tenant, and per high-cardinality",
-        "group, so a restrictive principal searches a small index instead of filtering a",
-        "large one. That is Phase 3 work; this benchmark exists to size it first.",
+        "| `authorize()` form | guest plan | guest p50 | raj p50 |",
+        "|---|---|---:|---:|",
+        "| Phase 2: `STABLE`, called per row | `Parallel Seq Scan` | 79.0 ms | 2.2 ms |",
+        "| ADR 0007: `IMMUTABLE`, inlinable | `HNSW (full)` | 6.1 ms | 2.2 ms |",
+        "| + coarse predicate & partial index | `HNSW (public partial)` | 2.0 ms | 2.2 ms |",
+        "",
+        "**13x of the 40x came from ADR 0007**, which was written to fix lexical-query latency",
+        "and had nothing to do with this. An opaque `STABLE` function gives the planner a",
+        "default selectivity guess that made the sequential scan look cheap; making the",
+        "predicate `IMMUTABLE` and inlinable let it fold the clauses into the query's quals and",
+        "estimate them properly. The cliff was a symptom of the same root cause as the 11x",
+        "lexical slowdown, and neither diagnosis saw that at the time.",
+        "",
+        "The remaining 3x is this phase's work: `coarse_predicate()` restates two of the",
+        "policy's own clauses in the query so the planner can index them, and migration 0008",
+        "adds partial HNSW graphs for the `public` and `public+internal` tiers. The public",
+        "graph is 4.4 MB against 81 MB for the full one, so the most restricted principal now",
+        "searches ~5% of the structure. Principals above ~80% selectivity are unaffected,",
+        "which is the intended outcome -- they were never on the wrong side of the cliff.",
+        "",
+        "Worth stating plainly: ADR 0006 proposed **per-tenant** partial indexes. That was the",
+        "wrong axis. The cliff is intra-tenant -- `guest` and `mira` share a tenant and differ",
+        "18x in what they can read -- so a per-tenant index would have helped neither.",
         "",
         "**2. `iterative_scan` fixes short returns; it does not fix recall.** At `ef_search=40`",
         "with iterative scan `off`, up to 3 of 10 queries return fewer than k rows. Turning it",
@@ -262,9 +336,48 @@ def to_markdown(results: list[Measurement], k: int, corpus_size: int) -> str:
         "|---|---:|---|---:|---:|---:|---:|---:|---:|",
     ]
     for m in results:
+        if not m.coarse:
+            continue
         lines.append(
             f"| {m.principal} | {m.selectivity:.1%} | `{m.scan_mode}` | {m.ef_search} | "
             f"{m.recall:.3f} | {m.short_returns} | {m.p50_ms:.0f} ms | {m.p95_ms:.0f} ms | "
             f"{m.exact_p50_ms:.0f} ms |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def before_after_markdown(results: list[Measurement], k: int) -> str:
+    """The ADR 0006 fix, measured on the same principals and queries in one run."""
+    before = {m.principal: m for m in results if not m.coarse}
+    after = {
+        m.principal: m
+        for m in results
+        if m.coarse and m.scan_mode == "relaxed_order" and m.ef_search == DEFAULT_EF
+    }
+
+    lines = [
+        "## The selectivity cliff, before and after",
+        "",
+        "`coarse_predicate()` restates two of the RLS policy's own clauses in the query —",
+        "`min_clearance <= clearance` and `sensitivity = 'public' OR allowed_groups && groups`",
+        "— so the planner can estimate and index them, and migration 0008 adds partial HNSW",
+        "graphs for the `public` and `public+internal` tiers those clauses can match.",
+        "",
+        "Both columns are the same principal, corpus, queries and settings",
+        f"(`relaxed_order`, `ef_search={DEFAULT_EF}`), measured in a single run. `recall` is",
+        "against exact brute-force ground truth computed under the same policy.",
+        "",
+        f"| principal | selectivity | before: plan / p50 / recall@{k} "
+        f"| after: plan / p50 / recall@{k} |",
+        "|---|---:|---|---|",
+    ]
+    for handle, b in before.items():
+        a = after.get(handle)
+        if a is None:
+            continue
+        lines.append(
+            f"| {handle} | {b.selectivity:.1%} "
+            f"| `{b.plan}` · {b.p50_ms:.0f} ms · {b.recall:.3f} "
+            f"| `{a.plan}` · {a.p50_ms:.0f} ms · {a.recall:.3f} |"
         )
     return "\n".join(lines) + "\n"

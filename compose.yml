@@ -8,6 +8,11 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: gatekeeper
     ports: ["5433:5432"]
+    # Docker defaults /dev/shm to 64 MB. Postgres uses shared memory segments for
+    # parallel workers, and building an HNSW index over 74k vectors overruns it with
+    # `could not resize shared memory segment ... No space left on device` — a disk-full
+    # error that has nothing to do with disk.
+    shm_size: 1gb
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

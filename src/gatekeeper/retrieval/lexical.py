@@ -19,10 +19,12 @@ from uuid import UUID
 from sqlalchemy import func, select, text
 
 from gatekeeper.core.models import Chunk, Document
-from gatekeeper.retrieval.search import RetrievedChunk
+from gatekeeper.retrieval.search import RetrievedChunk, coarse_predicate
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from gatekeeper.core.principal import Principal
 
 
 # Postgres has no built-in "any of these terms" query builder: `plainto_tsquery` and
@@ -43,7 +45,11 @@ _OR_TSQUERY = """
 
 
 async def lexical_topk(
-    session: AsyncSession, query: str, k: int = 50, tenant_id: UUID | None = None
+    session: AsyncSession,
+    query: str,
+    k: int = 50,
+    tenant_id: UUID | None = None,
+    principal: Principal | None = None,
 ) -> list[RetrievedChunk]:
     """Top-k by `ts_rank_cd` over an OR of the query's lexemes.
 
@@ -73,6 +79,11 @@ async def lexical_topk(
     )
     if tenant_id is not None:
         stmt = stmt.where(Chunk.tenant_id == tenant_id)
+    if principal is not None:
+        # Matters more here than on the dense path: lexical search hands the policy every
+        # row matching the tsquery, so narrowing the candidate set before ranking is the
+        # difference between ranking thousands of rows and ranking hundreds.
+        stmt = stmt.where(*coarse_predicate(Chunk, principal))
     rows = (await session.execute(stmt)).all()
     return [
         RetrievedChunk(
