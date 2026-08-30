@@ -114,6 +114,8 @@ class CrossEncoderReranker:
                     content=chunk.content,
                     score=float(scores[int(index)]),
                     sensitivity=chunk.sensitivity,
+                    injection_score=chunk.injection_score,
+                    injection_signals=chunk.injection_signals,
                 )
             )
         return ranked

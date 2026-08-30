@@ -22,6 +22,7 @@ from sqlalchemy import or_, select, text
 from gatekeeper.core import audit as audit_log
 from gatekeeper.core.db import admin_session, principal_session
 from gatekeeper.core.models import Chunk, Document
+from gatekeeper.redteam.injection import FLAG_THRESHOLD
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,6 +48,13 @@ class RetrievedChunk:
     content: str
     score: float
     sensitivity: str
+    injection_score: float = 0.0
+    injection_signals: tuple[str, ...] = ()
+
+    @property
+    def suspicious(self) -> bool:
+        """Flagged by the injection classifier. Annotate it; do not silently drop it."""
+        return self.injection_score >= FLAG_THRESHOLD
 
     @property
     def label(self) -> str:
@@ -143,6 +151,8 @@ async def _ann_query(
             Chunk.heading_path,
             Chunk.content,
             Chunk.sensitivity,
+            Chunk.injection_score,
+            Chunk.injection_signals,
             distance.label("distance"),
         )
         .join(Document, Document.id == Chunk.document_id)
@@ -181,6 +191,8 @@ async def _ann_query(
             content=row.content,
             score=1.0 - float(row.distance),
             sensitivity=row.sensitivity,
+            injection_score=float(row.injection_score),
+            injection_signals=tuple(row.injection_signals),
         )
         for row in rows
     ]

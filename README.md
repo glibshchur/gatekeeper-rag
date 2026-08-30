@@ -48,6 +48,9 @@ as prominently as the positive ones:
 - A performance fix to the ABAC predicate caused a *correctness* regression — retrieval
   returned zero results for a principal who could plainly `SELECT` two matching rows
   ([ADR 0007](docs/adr/0007-explicit-claims-not-ambient-session-state.md)).
+- **The semantic layer of the injection classifier was built, measured, and deleted.** It
+  contributed nothing, and the measurement shows it could not have worked at any threshold
+  ([ADR 0010](docs/adr/0010-injection-detection-is-the-second-line.md)).
 
 ---
 
@@ -154,10 +157,13 @@ Raj is not filtered out of a list he was shown. The row never leaves Postgres.
 
 - **MCP server** over stdio (`make mcp`), exposing the corpus as three authorization-scoped
   tools with no separate query path — so the red-team suite's guarantees cover it without
-  re-testing.
-- One principal per process, bound at launch; the server refuses to start on an expired
-  grant rather than starting and failing every call.
-- Withheld results reported as counts; unreadable and nonexistent paths indistinguishable.
+  re-testing. One principal per process, bound at launch. Withheld results reported as
+  counts, never identities; unreadable and nonexistent paths indistinguishable.
+- **Indirect prompt-injection detection** (`make injection`): 15/19 planted payloads caught
+  at a **0.004% false-positive rate** — 3 chunks in 73,801. Scored at ingest, stored, and
+  re-scorable in 15 seconds without re-embedding (`make rescan`). Flagged sources are
+  annotated for the model, never silently withheld
+  ([ADR 0010](docs/adr/0010-injection-detection-is-the-second-line.md)).
 
 ## What Phase 3 delivers
 

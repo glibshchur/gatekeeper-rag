@@ -23,6 +23,7 @@ from gatekeeper.ingest import blobs
 from gatekeeper.ingest.acl import AclRuleSet, ResolvedAcl, load_rules
 from gatekeeper.ingest.chunking import chunk_markdown
 from gatekeeper.llm.embeddings import Embedder
+from gatekeeper.redteam.injection import RuleScorer
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class IndexReport:
     documents_skipped: int = 0
     chunks_written: int = 0
     oversized_chunks: int = 0
+    flagged_chunks: int = 0
     override_chunks: int = 0
     unreachable_chunks: int = 0
     blobs_written: int = 0
@@ -47,6 +49,7 @@ class IndexReport:
             ("chunks written", f"{self.chunks_written:,}"),
             ("oversized chunks", f"{self.oversized_chunks:,}"),
             ("chunks with ACL overrides", f"{self.override_chunks:,}"),
+            ("chunks flagged for injection", f"{self.flagged_chunks:,}"),
             ("chunks made unreachable", f"{self.unreachable_chunks:,}"),
             ("blobs written", f"{self.blobs_written:,}"),
             ("blob failures", f"{self.blob_failures:,}"),
@@ -225,8 +228,10 @@ async def _index_one(
     )
 
     column = space.column
+    scorer = RuleScorer()
     for text_chunk, vector in zip(text_chunks, vectors, strict=True):
         acl = rules.resolve_chunk(base_acl, document.path, text_chunk.heading_path)
+        verdict = scorer.score(text_chunk.content)
         chunk = Chunk(
             tenant_id=document.tenant_id,
             document_id=document.id,
@@ -241,6 +246,8 @@ async def _index_one(
             jurisdiction=acl.jurisdiction,
             acl_source=acl.source,
             acl_rule=acl.rule,
+            injection_score=verdict.score,
+            injection_signals=list(verdict.signals),
             embedding_model=space.model,
         )
         setattr(chunk, column, vector.tolist())
@@ -248,6 +255,8 @@ async def _index_one(
         report.chunks_written += 1
         if text_chunk.oversized:
             report.oversized_chunks += 1
+        if verdict.flagged:
+            report.flagged_chunks += 1
         if acl.source == "override":
             report.override_chunks += 1
             # Group intersection can empty out when an override names groups the
@@ -314,6 +323,37 @@ async def reapply_acls(tenant_slug: str) -> dict[str, int]:
                     if not acl.allowed_groups and acl.sensitivity != "public":
                         stats["unreachable"] += 1
 
+    return stats
+
+
+async def rescan_injection(tenant_slug: str) -> dict[str, int]:
+    """Re-score every chunk against the current rules, in place.
+
+    Same rationale as `reapply_acls`: the rules change far more often than the corpus,
+    and a detection rule you can only test by re-embedding 74,000 chunks is a detection
+    rule nobody iterates on.
+    """
+    scorer = RuleScorer()
+    stats = {"chunks": 0, "flagged": 0, "quarantined": 0, "changed": 0}
+
+    async with admin_session() as session:
+        tenant_id = (
+            await session.execute(select(Tenant.id).where(Tenant.slug == tenant_slug))
+        ).scalar_one()
+        chunks = list(
+            (await session.execute(select(Chunk).where(Chunk.tenant_id == tenant_id))).scalars()
+        )
+        for chunk in chunks:
+            verdict = scorer.score(chunk.content)
+            stats["chunks"] += 1
+            if verdict.score != chunk.injection_score:
+                stats["changed"] += 1
+            chunk.injection_score = verdict.score
+            chunk.injection_signals = list(verdict.signals)
+            if verdict.flagged:
+                stats["flagged"] += 1
+            if verdict.quarantined:
+                stats["quarantined"] += 1
     return stats
 
 

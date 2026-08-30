@@ -70,6 +70,8 @@ async def lexical_topk(
             Chunk.heading_path,
             Chunk.content,
             Chunk.sensitivity,
+            Chunk.injection_score,
+            Chunk.injection_signals,
             score.label("score"),
         )
         .join(Document, Document.id == Chunk.document_id)
@@ -96,6 +98,8 @@ async def lexical_topk(
             content=row.content,
             score=float(row.score),
             sensitivity=row.sensitivity,
+            injection_score=float(row.injection_score),
+            injection_signals=tuple(row.injection_signals),
         )
         for row in rows
     ]

@@ -44,6 +44,12 @@ reacl: ## Re-apply corpus/acl_rules.yaml to existing chunks (no re-embedding)
 eval: ## Run the retrieval ablation over the golden set; writes docs/ABLATION.md
 	uv run gatekeeper eval
 
+injection: ## Score the injection classifier: detection and false-positive rate
+	uv run gatekeeper injection
+
+rescan: ## Re-score every chunk against the current injection rules
+	uv run gatekeeper index rescan
+
 redteam: ## Run the adversarial corpus; exits non-zero on any leak
 	uv run gatekeeper redteam
 
@@ -79,4 +85,4 @@ test: ## Unit tests only (no docker required)
 test-all: ## Full suite including RLS integration tests (needs docker)
 	uv run pytest -q
 
-.PHONY: help install up down nuke migrate fetch seed index repair reacl stats eval redteam bench verify-audit ask ui mcp whoami bootstrap lint fmt test test-all
+.PHONY: help install up down nuke migrate fetch seed index repair reacl stats eval injection rescan redteam bench verify-audit ask ui mcp whoami bootstrap lint fmt test test-all

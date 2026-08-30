@@ -19,3 +19,4 @@ useful than the reasoning that turned out to be right.
 | [0007](0007-explicit-claims-not-ambient-session-state.md) | Authorization reads its inputs as arguments, not from the session | Accepted |
 | [0008](0008-hybrid-search-measured-and-disabled.md) | Hybrid search: built, measured, and off by default | Accepted |
 | [0009](0009-mcp-surface-and-one-principal-per-process.md) | MCP: one principal per process; withheld results are counts | Accepted |
+| [0010](0010-injection-detection-is-the-second-line.md) | Injection detection is the second line; the semantic layer did not work | Accepted |

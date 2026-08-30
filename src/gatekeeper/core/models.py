@@ -23,6 +23,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -155,6 +156,11 @@ class Chunk(Base):
     jurisdiction: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     acl_source: Mapped[str] = mapped_column(Text, nullable=False, default="inherited")
     acl_rule: Mapped[str | None] = mapped_column(Text)
+
+    # Injection classifier verdict, computed at ingest. Stored rather than recomputed so
+    # that flags can be reviewed and triaged, not just reacted to inside one query.
+    injection_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    injection_signals: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
 
     # One column per embedding space. The dimension is part of the column type, so a
     # single nullable column cannot serve two models -- and Phase 3's ablation needs both

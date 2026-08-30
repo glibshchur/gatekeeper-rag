@@ -243,6 +243,16 @@ def index_reacl() -> None:
     console.print(table)
 
 
+@index_app.command("rescan")
+def index_rescan() -> None:
+    """Re-score every chunk against the current injection rules, without re-embedding."""
+    stats = _run(pipeline.rescan_injection(seed.TENANT_SLUG))
+    table = Table(title="Injection rescan", title_justify="left", show_header=False)
+    for label, value in stats.items():
+        table.add_row(label, f"{value:,}")
+    console.print(table)
+
+
 @index_app.command("stats")
 def index_stats() -> None:
     """Chunk counts per embedding space, and how much of the corpus is indexed."""
@@ -437,6 +447,79 @@ def bench(
         + filtered_ann.before_after_markdown(results, k)
     )
     console.print(f"\n[dim]written to {path}[/dim]")
+
+
+@app.command("injection")
+def injection(
+    backend: str = "",
+    semantic: Annotated[
+        bool, typer.Option(help="report exemplar-similarity diagnostics (not used for scoring)")
+    ] = True,
+) -> None:
+    """Score the injection classifier: detection on planted payloads, false positives on
+    the real corpus.
+
+    The second number is the one that decides whether this ships. Detection on attacks
+    you wrote yourself is easy; a flag rate a reviewer can live with is not.
+    """
+    from gatekeeper.redteam import injection_eval
+
+    settings = get_settings()
+    embedder = (
+        build_embedder(backend or settings.embedding_backend, settings.openai_api_key)
+        if semantic
+        else None
+    )
+    report = _run(injection_eval.run(embedder))
+
+    summary = Table(title="Injection classifier", title_justify="left", show_header=False)
+    detection = (
+        f"[green]{report.detection_rate:.0%}[/green]"
+        if report.detection_rate >= 0.8
+        else f"[yellow]{report.detection_rate:.0%}[/yellow]"
+    )
+    fpr = (
+        f"[green]{report.false_positive_rate:.3%}[/green]"
+        if report.false_positive_rate < 0.005
+        else f"[bold red]{report.false_positive_rate:.3%}[/bold red]"
+    )
+    summary.add_row("payloads detected", f"{report.detected}/{report.payloads}  {detection}")
+    summary.add_row("corpus chunks scanned", f"{report.corpus_chunks:,}")
+    summary.add_row("flagged (false positives)", f"{report.flagged:,}  {fpr}")
+    summary.add_row("quarantined", f"{report.quarantined:,}")
+    console.print(summary)
+
+    if report.subtle_similarity and report.plain_similarity:
+        lo_s, hi_s = min(report.subtle_similarity), max(report.subtle_similarity)
+        lo_p, hi_p = min(report.plain_similarity), max(report.plain_similarity)
+        console.print(
+            f"\n[dim]exemplar similarity: evasive payloads {lo_s:.3f}-{hi_s:.3f}, "
+            f"rule-detectable payloads {lo_p:.3f}-{hi_p:.3f}. The ranges overlap, which is "
+            f"why the semantic layer was removed rather than tuned: no threshold separates "
+            f"them.[/dim]"
+        )
+
+    if report.by_category:
+        cats = Table(title="Detection by category", title_justify="left")
+        cats.add_column("category")
+        cats.add_column("detected", justify="right")
+        for name, (hit, total) in sorted(report.by_category.items()):
+            marker = "[green]" if hit == total else "[yellow]"
+            cats.add_row(name, f"{marker}{hit}/{total}[/]")
+        console.print(cats)
+
+    if report.missed:
+        console.print("\n[yellow]Missed payloads:[/yellow] " + ", ".join(report.missed))
+
+    if report.worst:
+        console.print(
+            "\n[dim]highest-scoring corpus chunks (inspect these — they are the "
+            "false positives a reviewer would see first):[/dim]"
+        )
+        for fp in report.worst:
+            console.print(f"  [cyan]{fp.score:.3f}[/cyan] {fp.path}")
+            console.print(f"        [dim]{', '.join(fp.signals)}[/dim]")
+            console.print(f"        [dim]{fp.excerpt[:110]}[/dim]")
 
 
 @app.command("redteam")
