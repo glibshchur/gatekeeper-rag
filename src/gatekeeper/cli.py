@@ -522,6 +522,84 @@ def injection(
             console.print(f"        [dim]{fp.excerpt[:110]}[/dim]")
 
 
+@app.command("redteam-indirect")
+def redteam_indirect(
+    k: int = 10,
+    backend: str = "",
+    clean: Annotated[bool, typer.Option(help="only remove planted rows, then exit")] = False,
+) -> None:
+    """Plant poisoned documents in the live corpus and attack through the real pipeline.
+
+    Reports two rates that must not be confused: how often the classifier noticed, and
+    how often the attack widened access. Only the second one has to be perfect.
+    """
+    from gatekeeper.redteam import indirect
+
+    if clean:
+        removed = _run(indirect.unplant())
+        console.print(f"removed {removed} planted document(s)")
+        return
+
+    settings = get_settings()
+    embedder = build_embedder(backend or settings.embedding_backend, settings.openai_api_key)
+    report = _run(indirect.run(embedder, k=k))
+
+    summary = Table(
+        title="Indirect injection — live corpus", title_justify="left", show_header=False
+    )
+    summary.add_row("payloads planted", f"{report.planted}")
+    summary.add_row("corpus size while planted", f"{report.corpus_chunks:,} chunks")
+    summary.add_row("probes run", f"{report.probes_run}")
+    summary.add_row("payloads that reached the model", f"{report.reached}")
+    summary.add_row("of those, flagged by the classifier", f"{report.detected}")
+    summary.add_row(
+        "access widened",
+        "[bold green]0 — contained[/bold green]"
+        if report.contained
+        else f"[bold red]{len(report.breaches)} BREACH[/bold red]",
+    )
+    summary.add_row(
+        "reached, undetected, still contained",
+        f"[green]{report.undetected_but_contained}[/green]",
+    )
+    console.print(summary)
+
+    table = Table(title="Per payload", title_justify="left")
+    for col in ("payload", "category", "reached", "flagged", "contained"):
+        table.add_column(col, justify="left" if col in ("payload", "category") else "center")
+    for a in report.attempts:
+        name = f"{a.payload_id}{' *' if a.subtle else ''}"
+        table.add_row(
+            name,
+            a.category,
+            "yes" if a.retrieved else "[dim]no[/dim]",
+            "[green]yes[/green]" if a.flagged else ("[yellow]no[/yellow]" if a.retrieved else "-"),
+            "[bold red]NO[/bold red]" if a.widened else "[green]yes[/green]",
+        )
+    console.print(table)
+    console.print("[dim]* written to evade the classifier[/dim]")
+
+    if report.breaches:
+        console.print("\n[bold red]Breaches:[/bold red]")
+        for a in report.breaches:
+            for w in a.widened[:3]:
+                console.print(f"  {a.payload_id} -> {w}")
+        raise typer.Exit(1)
+
+    unreached = report.planted - report.reached
+    console.print(
+        "\n[green]Contained.[/green] No planted instruction widened what the attacker "
+        "could read, including the payloads the classifier did not detect."
+    )
+    if unreached:
+        console.print(
+            f"[yellow]Caveat:[/yellow] {unreached} payload(s) never ranked against the "
+            f"{report.corpus_chunks:,}-chunk corpus, so this run says nothing about them. "
+            "Their headings are generic enough that real handbook pages outrank them — "
+            "which is a property of the corpus, not evidence of a defence."
+        )
+
+
 @app.command("redteam")
 def redteam(
     quick: Annotated[

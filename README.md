@@ -162,8 +162,12 @@ Raj is not filtered out of a list he was shown. The row never leaves Postgres.
 - **Indirect prompt-injection detection** (`make injection`): 15/19 planted payloads caught
   at a **0.004% false-positive rate** — 3 chunks in 73,801. Scored at ingest, stored, and
   re-scorable in 15 seconds without re-embedding (`make rescan`). Flagged sources are
-  annotated for the model, never silently withheld
-  ([ADR 0010](docs/adr/0010-injection-detection-is-the-second-line.md)).
+  annotated for the model, never silently withheld.
+- **Red team v2** (`make redteam-indirect`): all 19 payloads planted as readable documents
+  **in the live corpus**, attacked through the real pipeline, removed afterwards. 13
+  reached the model, **0 widened access — including 2 that the classifier missed
+  entirely.** That is the point: containment is structural, so it does not depend on
+  detection working ([ADR 0010](docs/adr/0010-injection-detection-is-the-second-line.md)).
 
 ## What Phase 3 delivers
 

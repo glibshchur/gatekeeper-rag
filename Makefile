@@ -50,6 +50,9 @@ injection: ## Score the injection classifier: detection and false-positive rate
 rescan: ## Re-score every chunk against the current injection rules
 	uv run gatekeeper index rescan
 
+redteam-indirect: ## Plant poisoned docs in the live corpus and attack through the pipeline
+	uv run gatekeeper redteam-indirect
+
 redteam: ## Run the adversarial corpus; exits non-zero on any leak
 	uv run gatekeeper redteam
 
@@ -85,4 +88,4 @@ test: ## Unit tests only (no docker required)
 test-all: ## Full suite including RLS integration tests (needs docker)
 	uv run pytest -q
 
-.PHONY: help install up down nuke migrate fetch seed index repair reacl stats eval injection rescan redteam bench verify-audit ask ui mcp whoami bootstrap lint fmt test test-all
+.PHONY: help install up down nuke migrate fetch seed index repair reacl stats eval injection rescan redteam redteam-indirect bench verify-audit ask ui mcp whoami bootstrap lint fmt test test-all

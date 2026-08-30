@@ -90,3 +90,34 @@ Four defects, each found by a number rather than by review:
 None of these were visible by reading the rules. The false-positive rate is the metric that
 found all four, and it is the one that decides whether a detector survives contact with a
 real corpus — a classifier that flags 5% of a handbook gets switched off in week two.
+
+---
+
+## Measured end to end (red team v2)
+
+The argument above — that containment does not depend on detection — is now a measurement
+rather than a claim. `gatekeeper redteam-indirect` plants all 19 payloads as documents an
+ordinary employee may read, **in the live 73,801-chunk corpus**, attacks through the real
+retrieval pipeline as a real principal, and removes them in a `finally` block.
+
+| | |
+|---|---|
+| payloads planted | 19 |
+| reached the model (ranked in a top-10) | 13 |
+| of those, flagged by the classifier | 11 |
+| **access widened** | **0** |
+| **reached, undetected, still contained** | **2** |
+
+That last row is the one the architecture is judged on. Two payloads written specifically
+to evade the rules reached the model's context, the classifier said nothing, and neither
+returned a single row the principal was not entitled to. Every returned chunk is checked
+against the independent oracle, not just the planted ones, because the point of an
+injection is to make something *else* come back.
+
+**Two honest limits.** Six payloads never ranked against the real corpus, so the run says
+nothing about them; their headings are generic enough that real handbook pages outrank
+them, which is a property of the corpus rather than evidence of a defence, and the CLI
+prints that caveat rather than folding it into the pass. And the first version of this
+harness used six generic probes, reached only 3 of 19, and would have reported
+"contained" just as confidently — asserting a property for sixteen attacks that never
+happened. Reach is now reported as a first-class number for exactly that reason.

@@ -96,7 +96,8 @@ jobs:
             tests/integration/test_rls.py \
             tests/integration/test_abac.py \
             tests/integration/test_audit_chain.py \
-            tests/integration/test_pipeline.py
+            tests/integration/test_pipeline.py \\
+            tests/unit/test_injection.py
       - name: Note
         run: |
           echo "The full red-team corpus (\`make redteam\`) needs an embedded corpus and" \
