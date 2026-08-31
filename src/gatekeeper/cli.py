@@ -726,6 +726,32 @@ def cache_stats() -> None:
     console.print(table)
 
 
+@app.command("token")
+def token(
+    who: Annotated[str, typer.Option("--as", help="principal handle")],
+    ttl: Annotated[int, typer.Option(help="lifetime in seconds")] = 3600,
+    impersonate: Annotated[bool, typer.Option(help="grant the impersonation claim")] = False,
+) -> None:
+    """Mint a development bearer token for the console or the API.
+
+    Prints only the token, so it pipes: `curl -H "Authorization: Bearer $(gatekeeper token
+    --as raj)"`. Refused unless GK_AUTH_MODE is `dev`.
+    """
+    from gatekeeper.core import auth
+
+    async def go() -> str:
+        # Resolve first so a typo in the handle fails here rather than at the first
+        # request with a valid-looking token.
+        await seed.load_principal(who)
+        return auth.issue_dev_token(who, ttl_seconds=ttl, can_impersonate=impersonate)
+
+    try:
+        print(_run(go()))
+    except auth.AuthError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+
 @app.command("mcp")
 def mcp(
     who: Annotated[str, typer.Option("--as", help="principal handle to bind this server to")] = "",

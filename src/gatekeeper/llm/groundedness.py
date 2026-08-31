@@ -49,6 +49,26 @@ import numpy as np
 
 from gatekeeper.ingest.chunking import split_sentences
 
+
+def split_answer(answer: str) -> list[str]:
+    """Split a generated answer into claims.
+
+    The chunker's prose splitter is not enough here: a model answers in Markdown, and a
+    bulleted list is one "sentence" to a splitter that only looks for terminal punctuation.
+    That produced claims spanning four bullets, each scored against a single source and
+    each unsupported for reasons that had nothing to do with grounding.
+
+    Lines first, then sentences within a line.
+    """
+    claims: list[str] = []
+    for line in answer.splitlines():
+        stripped = line.strip().lstrip("-*+ ").strip()
+        if not stripped:
+            continue
+        claims.extend(split_sentences(stripped) or [stripped])
+    return claims
+
+
 if TYPE_CHECKING:
     from gatekeeper.llm.embeddings import Embedder
     from gatekeeper.retrieval.search import RetrievedChunk
@@ -66,9 +86,28 @@ MIN_CLAIM_WORDS = 5
 # a policy states limits in figures.
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
+# Citation markers are numbers the model wrote *about* the sources, not claims about the
+# world. The first real generated answer scored 0% supported entirely because "[2]" and
+# "[3]" were being read as unsupported figures -- a bug no amount of hand-written test
+# answers surfaced, because hand-written answers do not carry citations.
+_CITATION = re.compile(r"\[\d+(?:\s*,\s*\d+)*\]")
 
-def numbers_in(text: str) -> set[str]:
-    """Numeric tokens, normalised so "1,200" and "1200" compare equal."""
+# Markdown scaffolding in a generated answer: bullets, bold, headings. Left in place for
+# similarity (it is noise, not signal) but stripped before numeric extraction so "**$120**"
+# and "120" compare equal.
+_MARKUP = re.compile(r"[*_`#>]+")
+
+
+def numbers_in(text: str, *, strip_citations: bool = False) -> set[str]:
+    """Numeric tokens, normalised so "1,200" and "1200" compare equal.
+
+    `strip_citations` is set for claims and not for sources: a source has no citation
+    markers, and stripping bracketed digits from one would silently discard a real figure
+    written as "[2] business days".
+    """
+    if strip_citations:
+        text = _CITATION.sub(" ", text)
+    text = _MARKUP.sub(" ", text)
     return {m.group(0).replace(",", "").rstrip(".") for m in _NUMBER.finditer(text)}
 
 
@@ -117,7 +156,7 @@ def verify(answer: str, sources: list[RetrievedChunk], embedder: Embedder) -> Gr
         # generous: an answer with no sources is unverifiable, not verified.
         return GroundednessReport(sentences=[], skipped=0)
 
-    candidates = split_sentences(answer)
+    candidates = split_answer(answer)
     claims = [s for s in candidates if len(s.split()) >= MIN_CLAIM_WORDS]
     if not claims:
         return GroundednessReport(sentences=[], skipped=len(candidates))
@@ -140,7 +179,9 @@ def verify(answer: str, sources: list[RetrievedChunk], embedder: Embedder) -> Gr
                 sentence=sentence,
                 score=round(float(row[best]), 4),
                 best_source=best + 1,
-                unsupported_numbers=tuple(sorted(numbers_in(sentence) - available)),
+                unsupported_numbers=tuple(
+                    sorted(numbers_in(sentence, strip_citations=True) - available)
+                ),
             )
         )
     return GroundednessReport(sentences=supports, skipped=len(candidates) - len(claims))

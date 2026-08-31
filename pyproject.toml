@@ -26,6 +26,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
     "mcp>=2.1.1",
+    "pyjwt[crypto]>=2.13.0",
 ]
 
 [project.optional-dependencies]
@@ -60,6 +61,12 @@ packages = ["src/gatekeeper"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+
+[tool.ruff.lint.flake8-bugbear]
+# `Depends(...)` in a parameter default is FastAPI's documented dependency-injection
+# idiom, not the mutable-default bug B008 exists to catch. Listed explicitly rather than
+# ignoring B008 outright, which would also hide the real thing.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query"]
 
 [tool.ruff.lint]
 # TC (flake8-type-checking) is deliberately not selected: Pydantic and SQLAlchemy resolve

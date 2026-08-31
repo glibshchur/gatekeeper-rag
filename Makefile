@@ -80,6 +80,9 @@ verify-audit: ## Verify the tamper-evidence of the audit chain
 mcp: ## Serve the knowledge base over MCP on stdio (WHO=raj)
 	uv run gatekeeper mcp --as $(WHO)
 
+token: ## Mint a dev bearer token, e.g. make token WHO=raj
+	uv run gatekeeper token --as $(WHO)
+
 ui: ## Serve the demo console on http://127.0.0.1:8077
 	uv run gatekeeper serve
 
@@ -103,4 +106,4 @@ test: ## Unit tests only (no docker required)
 test-all: ## Full suite including RLS integration tests (needs docker)
 	uv run pytest -q
 
-.PHONY: help install up down nuke migrate migrate-check fetch seed index repair reacl stats eval injection rescan cache-purge redteam redteam-indirect bench verify-audit ask ui mcp whoami bootstrap lint fmt test test-all
+.PHONY: help install up down nuke migrate migrate-check fetch seed index repair reacl stats eval injection rescan cache-purge redteam redteam-indirect bench verify-audit ask ui mcp token whoami bootstrap lint fmt test test-all

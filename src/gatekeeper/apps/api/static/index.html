@@ -117,18 +117,20 @@
 <body>
 <header>
   <h1>gatekeeper-rag <span>· permission-aware retrieval console</span></h1>
-  <div class="warn">
-    <strong>Demo surface, not an authenticated one.</strong> The principal switcher is
-    impersonation with no credential check — that is the point of the console, and it is
-    why this port must not be exposed. What it shows honestly is the layer beneath:
-    every result came back through row-level security over a connection that cannot bypass it.
+  <div class="warn" id="banner">
+    <strong>Development authentication.</strong> Signing in below mints a real bearer
+    token — verified signature, real expiry — but the endpoint that issues it asks for no
+    password, so anyone who can reach this port can sign in as anyone. That is what
+    <code>GK_AUTH_MODE=dev</code> means. Set <code>GK_AUTH_MODE=oidc</code> and the
+    mint endpoint disappears.
   </div>
 </header>
 
 <main>
   <aside class="panel">
-    <h2>Ask as</h2>
+    <h2 id="whoHeading">Sign in as</h2>
     <div class="who" id="who"></div>
+    <div id="session" class="meta" style="padding:0 14px 12px"></div>
   </aside>
 
   <section>
@@ -156,13 +158,65 @@ const el = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 let principals = [];
+let token = sessionStorage.getItem("gk_token") || null;
+let identity = null;
+
+function authHeaders() {
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
+async function signIn(handle) {
+  const res = await fetch("/api/dev-login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handle }),
+  });
+  if (!res.ok) throw new Error(`sign-in failed: ${res.status}`);
+  token = (await res.json()).token;
+  sessionStorage.setItem("gk_token", token);
+  await loadIdentity();
+}
+
+async function loadIdentity() {
+  if (!token) { identity = null; return; }
+  const res = await fetch("/api/me", { headers: authHeaders() });
+  if (!res.ok) {                 // expired or revoked: drop it rather than retry forever
+    token = null; identity = null; sessionStorage.removeItem("gk_token");
+    return;
+  }
+  identity = await res.json();
+  renderSession();
+}
+
+function renderSession() {
+  const el2 = el("session");
+  if (!identity) { el2.textContent = "not signed in"; return; }
+  const until = new Date(identity.expires_at * 1000).toLocaleTimeString();
+  el2.innerHTML =
+    `signed in as <strong>${esc(identity.display_name)}</strong><br>` +
+    `token expires ${until}` +
+    (identity.can_impersonate ? "<br>may impersonate (comparison enabled)" : "") +
+    ` · <a href="#" id="signout">sign out</a>`;
+  el("signout").onclick = (e) => {
+    e.preventDefault();
+    token = null; identity = null; sessionStorage.removeItem("gk_token");
+    boot();
+  };
+  el("whoHeading").textContent = identity.can_impersonate ? "Compare as" : "Signed in";
+}
 
 async function boot() {
-  principals = await (await fetch("/api/principals")).json();
+  principals = await (await fetch("/api/principals", { headers: authHeaders() })).json();
+  await loadIdentity();
+  renderSession();
   const preferred = new Set(["raj", "mira"]);
+  // Before sign-in the picker is radio-style: you become one principal. After signing in
+  // with the impersonation claim it becomes multi-select for the comparison view.
+  const kind = identity ? "checkbox" : "radio";
   el("who").innerHTML = principals.map(p => `
     <label>
-      <input type="checkbox" value="${esc(p.handle)}" ${preferred.has(p.handle) ? "checked" : ""}>
+      <input type="${kind}" name="who" value="${esc(p.handle)}" ${
+        identity && preferred.has(p.handle) ? "checked" : ""}>
       <span class="nm">${esc(p.display_name)}</span>
       <div class="meta">clearance ${p.clearance} · ${esc(p.groups.join(", ") || "no groups")}</div>
       <div class="bar"><i data-bar="${esc(p.handle)}" style="width:0"></i></div>
@@ -176,9 +230,22 @@ async function boot() {
     if (q) { el("question").value = q; el("q").requestSubmit(); }
   };
 
+  if (!identity) {
+    el("who").onchange = async (e) => {
+      if (e.target.name !== "who") return;
+      try { await signIn(e.target.value); await boot(); }
+      catch (err) { el("out").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+    };
+  }
+
   // Load each principal's at-rest access surface so the sidebar shows scale, not just names.
-  const surfaces = await Promise.all(
-    principals.map(p => fetch(`/api/surface/${p.handle}`).then(r => r.json()).catch(() => null)));
+  // Surfaces need a token, and before sign-in there is none — requesting them anyway
+  // just fills the console with 401s that look like a bug.
+  const surfaces = identity
+    ? await Promise.all(principals.map(p =>
+        fetch(`/api/surface/${p.handle}`, { headers: authHeaders() })
+          .then(r => r.ok ? r.json() : null).catch(() => null)))
+    : principals.map(() => null);
   const peak = Math.max(...surfaces.filter(Boolean).map(s => s.chunks), 1);
   surfaces.forEach(s => {
     if (!s) return;
@@ -253,17 +320,22 @@ function render(data) {
 el("q").onsubmit = async (e) => {
   e.preventDefault();
   const question = el("question").value.trim();
-  const handles = selected();
   if (!question) return;
-  if (!handles.length) { el("out").innerHTML = `<div class="empty">Select at least one principal.</div>`; return; }
+  if (!identity) {
+    el("out").innerHTML = `<div class="empty">Sign in first — pick a principal on the left.</div>`;
+    return;
+  }
+  // The caller's own principal is implied by the token; anything else is impersonation
+  // and the server checks the claim rather than trusting this list.
+  const impersonate = selected().filter(h => h !== identity.handle);
 
   el("go").disabled = true;
-  el("out").innerHTML = `<div class="empty">Searching as ${handles.length} principal(s)…</div>`;
+  el("out").innerHTML = `<div class="empty">Searching as ${1 + impersonate.length} principal(s)…</div>`;
   try {
     const res = await fetch("/api/ask", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ question, handles, k: 8 }),
+      headers: { "content-type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ question, impersonate, k: 8 }),
     });
     if (!res.ok) throw new Error(await res.text());
     render(await res.json());

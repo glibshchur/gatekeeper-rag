@@ -31,6 +31,19 @@ class Settings(BaseSettings):
     s3_secret_key: str = "gatekeeper"
     s3_bucket: str = "gatekeeper-raw"
 
+    # --- authentication -----------------------------------------------
+    # "dev" verifies HS256 tokens signed with a local secret, so the whole system runs
+    # with no identity provider. "oidc" verifies RS256 against a JWKS endpoint.
+    auth_mode: str = "dev"
+    auth_dev_secret: str = "gatekeeper-dev-secret-do-not-use-in-production"
+    allow_insecure_dev_auth: bool = False
+    oidc_jwks_url: str | None = None
+    oidc_issuer: str | None = None
+    oidc_audience: str = "gatekeeper"
+    # Which claim carries the principal handle. Keycloak uses `preferred_username`;
+    # `sub` is an opaque uuid that will not match `principals.external_id`.
+    oidc_subject_claim: str = "preferred_username"
+
     # The MCP server binds to exactly one principal for its lifetime; see
     # gatekeeper.apps.mcp.server for why that is the right model there and not a shortcut.
     mcp_principal: str | None = None

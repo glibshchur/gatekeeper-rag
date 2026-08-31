@@ -182,3 +182,54 @@ def test_substitution_that_changes_no_number_is_still_uncaught(embedder: Embedde
         "if this now fails, semantic contradiction detection has improved -- update the "
         "docstring in groundedness.py, which tells readers it cannot do this"
     )
+
+
+def test_citation_markers_are_not_treated_as_claims_about_the_world(
+    embedder: Embedder,
+) -> None:
+    """Regression from the first real generated answer, which scored 0% supported.
+
+    Every claim was rejected for "figures ['2', '3'] appear in no source" — those were
+    the model's citation markers. No hand-written test answer surfaced this, because
+    hand-written answers do not carry citations, which is the whole argument for running
+    the pipeline end to end at least once.
+    """
+    report = verify(
+        "Receipts are required for any expense above 25 USD [1][2]. "
+        "New team members finish security training first [2].",
+        SOURCES,
+        embedder,
+    )
+    assert report.grounded, f"citation markers leaked into numbers: {report.unsupported}"
+    assert all(not s.unsupported_numbers for s in report.sentences)
+
+
+def test_a_bracketed_figure_in_a_source_is_still_a_figure(embedder: Embedder) -> None:
+    # Citations are stripped from claims, never from sources: a source has no citation
+    # markers, and stripping bracketed digits there would discard real data.
+    from gatekeeper.llm.groundedness import numbers_in
+
+    assert numbers_in("payment due in [30] days") == {"30"}
+    assert numbers_in("supported by [2] and [3]", strip_citations=True) == set()
+
+
+def test_a_markdown_list_is_split_into_separate_claims(embedder: Embedder) -> None:
+    """A model answers in Markdown. A prose splitter treats a four-bullet list as one
+    sentence, which then gets scored against a single source and fails for reasons that
+    have nothing to do with grounding."""
+    from gatekeeper.llm.groundedness import split_answer
+
+    claims = split_answer(
+        "Limits are as follows:\n"
+        "- **Meals**: up to 75 USD per day\n"
+        "- **Receipts**: required above 25 USD\n"
+        "- **Deadline**: within 30 days\n"
+    )
+    assert len(claims) >= 3
+    assert not any("\n" in c for c in claims)
+
+
+def test_markdown_emphasis_does_not_hide_a_figure(embedder: Embedder) -> None:
+    from gatekeeper.llm.groundedness import numbers_in
+
+    assert "750" in numbers_in("reimbursable up to **750 USD** per day")

@@ -126,9 +126,11 @@ The sharpest thing it makes visible: ask *"How do I report a security incident?"
 incident-response guide that Mira does not. **Clearance is a ceiling, not a key** — a high
 clearance without the right group grants nothing.
 
-> The console impersonates principals with no credential check. That is deliberate — it is
-> what makes the comparison possible — and it is why it binds to loopback and says so in a
-> banner. Real authentication is Phase 5.
+> Sign-in mints a real bearer token — verified signature, issuer, audience and expiry. In
+> `dev` mode the endpoint that issues it asks for no password, which is what
+> `GK_AUTH_MODE=dev` means; set `GK_AUTH_MODE=oidc` and it disappears. Impersonation is a
+> claim on the token, refused with a 403 without it, and audited under the real principal
+> ([ADR 0013](docs/adr/0013-tokens-assert-identity-not-entitlement.md)).
 
 ## The demo
 

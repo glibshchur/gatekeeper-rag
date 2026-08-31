@@ -22,3 +22,4 @@ useful than the reasoning that turned out to be right.
 | [0010](0010-injection-detection-is-the-second-line.md) | Injection detection is the second line; the semantic layer did not work | Accepted |
 | [0011](0011-cache-by-entitlement-not-identity.md) | The query cache is keyed by entitlement and stores decisions, not data | Accepted |
 | [0012](0012-groundedness-needs-two-layers.md) | Groundedness needs a numeric check; embeddings cannot see numbers | Accepted |
+| [0013](0013-tokens-assert-identity-not-entitlement.md) | A token asserts identity; the database owns entitlement | Accepted |
