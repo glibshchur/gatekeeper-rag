@@ -247,9 +247,24 @@ Arq workers + DLQ + incremental reindex, OIDC auth (+ Keycloak profile), Next.js
 (chat, ACL editor, impersonation preview, eval dashboard, audit viewer), OTel + Grafana +
 Langfuse, k6 load test.
 
-**Phase 6 — Packaging (week 12)** → `v1.0`
-README rewrite, architecture diagrams, `BENCHMARKS.md`, 4-minute walkthrough video, GIFs,
-3 writeups, Upwork case-study copy, CHANGELOG. Freeze features; polish only.
+**Phase 6 — Packaging (week 12)** → `v1.0` ✅ *complete*
+README rewrite, architecture diagrams (Mermaid, in-repo), `THREAT_MODEL.md`, `CHANGELOG.md`,
+3 writeups, Upwork case-study copy.
+
+Two amendments:
+
+- **Diagrams are Mermaid, not images.** They render on GitHub, diff as text, and cannot go
+  stale the silent way a checked-in PNG does. Every block is parse- and render-checked
+  under GitHub's strict security level.
+- **The video and GIFs are scripted, not recorded.** They need a screen capture, which is
+  the one deliverable that cannot be produced from a terminal. [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md)
+  is the shot list: exact commands, timings, and narration for a 4-minute walkthrough and
+  three GIFs. **This is the only outstanding item in the plan.**
+
+Packaging also turned up work rather than just describing it: re-running the ablation to
+check the numbers before publishing them invalidated two of its own supporting claims, and
+the generated findings prose is now computed from the results rather than typed in — it had
+already drifted from the table directly above it.
 
 Stretch (if ahead): Helm chart, fine-tuned domain reranker, GraphRAG entity layer, Slack bot.
 

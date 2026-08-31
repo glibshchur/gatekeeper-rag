@@ -9,10 +9,32 @@ a compromised API process leaks documents. `gatekeeper-rag` pushes authorization
 Postgres row-level security, so the database itself refuses to return rows the caller is
 not cleared to see — and the query layer connects as a role that *cannot* bypass it.
 
-> **Status: Phase 4 of 6.** Retrieval quality is now measured: a hand-written golden set,
-> a stage-by-stage ablation, hybrid search, and cross-encoder reranking. Contextual
-> retrieval and agentic multi-hop land in Phase 4. See [PROJECT_PLAN.md](PROJECT_PLAN.md)
-> for the full roadmap.
+> **Status: v1.0 — all six phases complete.** Authorization, retrieval quality, agentic
+> surface, platform and packaging. See [CHANGELOG.md](CHANGELOG.md) for what each phase
+> delivered, [PROJECT_PLAN.md](PROJECT_PLAN.md) for the original roadmap, and
+> [THREAT_MODEL.md](docs/THREAT_MODEL.md) for what is still weak.
+
+```mermaid
+flowchart LR
+    Q["question"] --> T
+    subgraph T["one transaction"]
+        direction TB
+        G["claims → transaction-local GUC"]
+        S["HNSW scan · RLS predicate<br/>inside the scan"]
+        G --> S
+    end
+    T --> R["only permitted rows"] --> A["reranked, cited answer"]
+    X["a bug, an injected prompt,<br/>a compromised query path"] -.-> S
+
+    style S stroke:#3fb950,stroke-width:2px
+    style X stroke:#f85149
+```
+
+The restricted row never leaves Postgres. More: [request path](docs/diagrams/request-path.md) ·
+[the decision](docs/diagrams/authorization.md) · [ingestion](docs/diagrams/ingestion.md) ·
+[trust boundaries](docs/diagrams/trust-boundaries.md).
+
+<!-- Walkthrough video: record from docs/DEMO_SCRIPT.md, then link the unlisted YouTube URL here. -->
 
 ## Results
 
@@ -21,10 +43,11 @@ not cleared to see — and the query layer connects as a role that *cannot* bypa
 | Leaks across 360 adversarial probes + 6 direct-fetch + 8 boundary probes | **0** |
 | (principal, chunk) pairs where the database and an independent oracle disagree | **0 of 442,782** |
 | Over-block rate (entitled results withheld) | **1.15%** |
-| nDCG@10 on 58 hand-written questions (`dense+rerank`) | **0.796** |
-| Retrieval latency p50, dense / dense+rerank | **8 ms / 215 ms** |
+| nDCG@10 on 58 hand-written questions (`dense+rerank`) | **0.793** ±0.003 |
+| Retrieval latency p50, dense / dense+rerank | **8 ms / 205 ms** |
 | Recall@10 vs exact brute force, `ef_search=200` | **1.000** |
 | RLS-filtered ANN throughput, 64 concurrent, auditing on | **1,207 q/s** |
+| Indirect injections that reached the model and widened access | **0 of 13** |
 
 The authorization numbers come from [`src/gatekeeper/redteam/`](src/gatekeeper/redteam/),
 which scores the SQL policy against a **separate Python implementation of the same written
@@ -36,19 +59,18 @@ Retrieval quality is in [`docs/ABLATION.md`](docs/ABLATION.md), measured over 58
 hand-written questions labelled against real documents — never generated from chunk text,
 which would make the eval circular and hand lexical search a win by construction.
 
-**Three of the most useful results in this project are negative**, and they are reported
-as prominently as the positive ones:
+**The most useful results in this project are negative**, and they are reported as
+prominently as the positive ones:
 
-- The selectivity cliff — 79x worse latency for the most restricted users, silently — is
-  **fixed**, 79 ms → 2.0 ms. But 13x of the 40x came from a change made for an unrelated
-  reason, and this ADR's own proposed fix was on the wrong axis
+- **The most restricted users were the slowest** — 36× — because below a selectivity
+  threshold Postgres abandons the vector index, and nothing in the results indicates it.
+  Fixed, 79 ms → 2.0 ms. But 13× of that 40× came from a change made weeks earlier for an
+  unrelated reason, and this ADR's own proposed fix was on the wrong axis
   ([ADR 0006](docs/adr/0006-filtered-ann-and-index-selectivity.md)).
-- **Hybrid search does not pay on this corpus** and is off by default: 0.797 against
-  `dense+rerank`'s 0.796, for 56% more latency
+- **Hybrid search does not pay on this corpus** and is off by default. Across four runs it
+  finished ahead of `dense+rerank` twice and behind it twice — every gap inside the noise
+  band — while costing 66% more latency
   ([ADR 0008](docs/adr/0008-hybrid-search-measured-and-disabled.md)).
-- A performance fix to the ABAC predicate caused a *correctness* regression — retrieval
-  returned zero results for a principal who could plainly `SELECT` two matching rows
-  ([ADR 0007](docs/adr/0007-explicit-claims-not-ambient-session-state.md)).
 - **The semantic layer of the injection classifier was built, measured, and deleted.** It
   contributed nothing, and the measurement shows it could not have worked at any threshold
   ([ADR 0010](docs/adr/0010-injection-detection-is-the-second-line.md)).
@@ -56,12 +78,24 @@ as prominently as the positive ones:
   a tenfold error in an expense limit as supported — in a corpus that is nothing but
   thresholds ([ADR 0012](docs/adr/0012-groundedness-needs-two-layers.md)).
 - **Turning the audit chain off made tail latency three times *worse*.** Throughput rose
-  45%, p99 went from 361 ms to 992 ms: the advisory lock was pacing the pipeline
+  45%, p99 went from 361 ms to 992 ms: the advisory lock had been pacing the pipeline
   ([ADR 0016](docs/adr/0016-the-bottleneck-is-the-embedder.md)).
+- **Re-running the ablation invalidated two of its own supporting claims.** The fused arm
+  spans 0.021 across runs where every other arm spans ≤0.003, and "bigger candidate pools
+  are worse" turned out to be an artifact of measuring once
+  ([ADR 0008](docs/adr/0008-hybrid-search-measured-and-disabled.md#re-measured)).
+
+And two bugs found by testing rather than reading:
+
+- A performance fix to the ABAC predicate caused a *correctness* regression — retrieval
+  returned zero results for a principal who could plainly `SELECT` two matching rows
+  ([ADR 0007](docs/adr/0007-explicit-claims-not-ambient-session-state.md)).
 - **A background job reported `succeeded` while silently failing to index a document**,
   because `index_one` returned the same value for "unchanged" and "the file is gone". Found
   by hiding a source file and watching the job pass
   ([ADR 0014](docs/adr/0014-jobs-are-rows-not-just-messages.md)).
+
+Three of these are written up at length in [`docs/writeups/`](docs/writeups/).
 
 ---
 
@@ -166,119 +200,52 @@ asked as Mira Lindqvist — CFO  clearance=3 groups=all-employees, finance, exec
 
 Raj is not filtered out of a list he was shown. The row never leaves Postgres.
 
-## What Phase 5 delivers
+## What it does
 
-- **Bearer-token authentication** on the console — HS256 for local development, RS256
-  against a JWKS endpoint for OIDC. A verified token establishes a *subject* and nothing
-  else: groups, clearance and need-to-know are read from the database every time, so a
-  forged claim cannot invent an entitlement
-  ([ADR 0013](docs/adr/0013-tokens-assert-identity-not-entitlement.md)).
-- **Background ingestion** (`make worker`, `gatekeeper jobs`) — arq over the Redis that had
-  been idle since Phase 0. The queue message carries only a job id; every parameter and all
-  progress lives in an `ingest_jobs` row, so a stuck reindex is debuggable with a `SELECT`.
-  Per-document transactions mean one bad document costs one document, not the
-  forty-minute run it used to cost. Retry re-enqueues only what failed
-  ([ADR 0014](docs/adr/0014-jobs-are-rows-not-just-messages.md)).
-- **Tracing that cannot become a side channel** (`GK_OTEL_ENDPOINT`, `--profile
-  observability`). Spans carry the query's *length*, never its text; the entitlement
-  fingerprint, never the principal. A test walks the AST of every module and fails if any
-  span names a content-bearing attribute
-  ([ADR 0015](docs/adr/0015-traces-carry-shapes-not-contents.md)).
-- **A concurrency sweep with its own control** (`make load`, [`docs/LOAD.md`](docs/LOAD.md)).
-  The authorized database path sustains **1,207 q/s** at concurrency 64 over 73,801 chunks
-  with auditing on; the full request path caps at 201. **The bottleneck is the co-located
-  embedding model, not row-level security** — a six-fold gap that the unqualified number
-  would have hidden ([ADR 0016](docs/adr/0016-the-bottleneck-is-the-embedder.md)).
+<details>
+<summary><b>Authorization</b> — ABAC in one SQL function, verified against an independent implementation</summary>
 
-## What Phase 4 delivers so far
+- **One decision function.** `gatekeeper.authorize()` enforces tenant, expiry, deny rules, clearance, group overlap, need-to-know and jurisdiction. Both the `documents` and `chunks` policies call it, so they cannot drift apart.
+- **Need-to-know is subset, not overlap** — a chunk tagged `{pii, compensation}` requires both grants. **Deny beats allow**, and deny rules live in a table as data, so a litigation hold is an `INSERT` rather than a deploy.
+- **Chunk-level overrides can only tighten**: clearance and sensitivity take the maximum, tags union, groups intersect. A malformed override cannot grant access.
+- **Hash-chained audit log**, written in the same transaction as the query it describes. Tamper detection tested by editing and deleting rows.
+- **Split-privilege connections**: queries run as `gatekeeper_app` (`NOSUPERUSER`, `NOBYPASSRLS`); policies are `FORCE`d so even the owner is subject to them.
+- **Claims in a transaction-local GUC**, so authorization context cannot leak across pooled connections.
 
-- **MCP server** over stdio (`make mcp`), exposing the corpus as three authorization-scoped
-  tools with no separate query path — so the red-team suite's guarantees cover it without
-  re-testing. One principal per process, bound at launch. Withheld results reported as
-  counts, never identities; unreadable and nonexistent paths indistinguishable.
-- **Indirect prompt-injection detection** (`make injection`): 15/19 planted payloads caught
-  at a **0.004% false-positive rate** — 3 chunks in 73,801. Scored at ingest, stored, and
-  re-scorable in 15 seconds without re-embedding (`make rescan`). Flagged sources are
-  annotated for the model, never silently withheld.
-- **Red team v2** (`make redteam-indirect`): all 19 payloads planted as readable documents
-  **in the live corpus**, attacked through the real pipeline, removed afterwards. 13
-  reached the model, **0 widened access — including 2 that the classifier missed
-  entirely.** That is the point: containment is structural, so it does not depend on
-  detection working ([ADR 0010](docs/adr/0010-injection-detection-is-the-second-line.md)).
-- **Query cache keyed by entitlement, not identity** — 267 ms → 12 ms on a hit (21.7x).
-  Stores chunk *ids*, never content, so every hit is re-authorized through RLS: a forged
-  entry pointing at a restricted chunk still returns nothing
-  ([ADR 0011](docs/adr/0011-cache-by-entitlement-not-identity.md)).
-- **Groundedness verification in two layers** — similarity catches fabrication and
-  negation; an exact numeric check catches what similarity cannot see. Changing an expense
-  limit from 75 to 750 USD scores 0.867 against a faithful 0.884
-  ([ADR 0012](docs/adr/0012-groundedness-needs-two-layers.md)).
+</details>
 
-## What Phase 3 delivers
+<details>
+<summary><b>Retrieval</b> — measured over a hand-written golden set, with the stages that didn't pay reported too</summary>
 
-- **58-question golden set**, hand-written against verified documents, each labelled with
-  the principal entitled to the answer — so metrics describe the system as deployed rather
-  than an unauthorized ideal. A validation pass fails the run if any label is unreachable.
-- **Stage-by-stage ablation** where the arms differ only in a `RetrievalConfig`, never in
-  code path. Recall@k, MRR, nDCG@10, per-category breakdown, and the questions the best
-  configuration still misses.
-- **Lexical retrieval** (`tsvector`, OR-of-lexemes, `ts_rank_cd`) and **Reciprocal Rank
-  Fusion**, both under the same RLS policy as the dense path.
-- **Cross-encoder reranking** (`ms-marco-MiniLM-L-6-v2` via ONNX, CPU, no API key):
-  +6% MRR, +4% nDCG. The only unambiguous win of the phase.
-- **8x faster authorization** by passing claims as an argument instead of reading them
-  ambiently in the predicate — 797 ms → 100 ms on a lexical query.
+- **Structure-aware chunking**: heading hierarchy prefixed onto every chunk, tables and code fences atomic, sentence-boundary splits for prose.
+- **Dense retrieval with the ACL predicate inside the vector scan** — `halfvec` HNSW indexes on the same relation as the RLS policy, so ranking and authorization are one scan.
+- **Cross-encoder reranking**: +9% MRR, +6% nDCG. The only unambiguous win of the retrieval phase.
+- **Lexical retrieval and RRF**, both under the same policy — built, measured, and off by default.
+- **Partial HNSW indexes per sensitivity tier**, which closed the selectivity cliff.
+- **58-question golden set** with a validation pass that fails the run if any label is unreachable, and published variance bands.
 
-## What Phase 2 delivers
+</details>
 
-- **ABAC engine in one SQL function.** `gatekeeper.authorize()` enforces tenant, expiry,
-  deny rules, clearance, group overlap, need-to-know, and jurisdiction. Both policies call
-  it, so `documents` and `chunks` cannot drift apart.
-- **Need-to-know is subset, not overlap** — a chunk tagged `{pii, compensation}` requires
-  both grants. **Jurisdiction** scopes per-entity employment policy by region.
-  **Deny beats allow**, and deny rules live in a table as data, so a litigation hold is an
-  `INSERT` rather than a deploy.
-- **Chunk-level ACL overrides** that can only *tighten*: clearance and sensitivity take
-  the maximum, tags union, groups intersect. A malformed override cannot grant access.
-- **Hash-chained audit log**, written in the same transaction as the query it describes,
-  append-only from the data plane, with tamper detection tested by editing and deleting
-  rows.
-- **Adversarial suite**: 360 probes across 8 attack categories, plus direct primary-key
-  fetch, aggregate enumeration, forged expired claims, cross-tenant probing, and an
-  exhaustive oracle reconciliation over every (principal, chunk) pair.
-- **Filtered-ANN benchmark** with exact ground truth, and `ef_search` raised to 200
-  because the data said 100 costs up to 20% recall.
+<details>
+<summary><b>Agentic surface</b> — MCP, injection containment, caching, groundedness</summary>
 
-## What Phase 1 delivers
+- **MCP server** over stdio with three tools and no separate query path, so the red-team suite covers it without re-testing. One principal per process, bound at launch.
+- **Withheld results are counts, never identities** — hand a model the title of a withheld document and it writes that title into its answer. **`get_document` returns byte-identical responses for unreadable and nonexistent paths**, so it cannot be used to enumerate the corpus.
+- **Injection detection** at a 0.004% false-positive rate, scored at ingest and re-scorable in 15 seconds without re-embedding. Flagged sources are annotated for the model, never silently withheld.
+- **Query cache keyed by entitlement**, storing chunk *ids* so every hit is re-authorized: 267 ms → 12 ms.
+- **Groundedness in two layers** — similarity, plus an exact numeric check for what similarity cannot see.
 
-- **Structure-aware Markdown chunking**: heading hierarchy preserved and prefixed onto
-  every chunk, tables and code fences atomic, oversized tables split on row boundaries
-  with the header repeated, sentence-boundary splits for prose.
-- **Two embedding backends behind one interface**: `bge-small-en-v1.5` via ONNX Runtime on
-  CPU (default, no API key) and OpenAI `text-embedding-3-*`. Chunk size is derived from
-  the backend's context window, not hardcoded.
-- **Dense retrieval with the ACL predicate inside the vector scan** — `halfvec` HNSW
-  indexes live on the same relation as the RLS policy, so ranking and authorization are
-  one scan. See [ADR 0004](docs/adr/0004-embedding-columns-on-chunks.md).
-- **Cited answer generation** with source spotlighting, hallucinated-citation rejection,
-  and an explicit ungrounded warning when the model cites nothing.
-- Content-addressed blob storage in MinIO; incremental re-index keyed on content hash,
-  and `index repair` to re-chunk only documents the current parameters invalidate.
-- A **demo console** (`make ui`) for side-by-side retrieval across principals.
+</details>
 
-## What Phase 0 delivers
+<details>
+<summary><b>Platform</b> — auth, background work, tracing, load</summary>
 
-- Postgres 16 + pgvector 0.8 schema with **row-level security enabled and forced** on every
-  tenant-scoped table.
-- A **split-privilege connection model**: migrations and ingestion run as the table owner;
-  queries run as `gatekeeper_app`, a `NOSUPERUSER`/`NOBYPASSRLS` role.
-- `Principal` claims pushed into a **transaction-local** Postgres GUC via `set_config(...,
-  true)`, so authorization context cannot leak across pooled connections.
-- ACLs derived from corpus structure by a **declarative rule file**
-  ([`corpus/acl_rules.yaml`](corpus/acl_rules.yaml)) — 19 rules, first-match-wins,
-  auditable without reading Python.
-- Hash-chained `audit_log` table for tamper-evident authorization records.
-- Integration tests proving two principals get different row counts from the same query.
+- **Bearer tokens** (HS256 dev / RS256 OIDC) that establish a *subject* and nothing else; entitlements are read from the database every request.
+- **Background ingestion** over arq where the queue message carries only a job id and all state lives in a row, with per-document failure isolation and targeted retry.
+- **Tracing whose spans carry shapes, never contents** — enforced by a test that walks the AST of every module.
+- **Concurrency sweep with a control arm** that identifies the real bottleneck.
+
+</details>
 
 ## The access model
 
@@ -309,10 +276,17 @@ src/gatekeeper/
 ├─ llm/         embeddings, generation, provider abstraction
 ├─ evals/       golden set, ablation, filtered-ANN benchmark
 ├─ redteam/     independent oracle + adversarial corpus
-└─ apps/        api · worker · mcp                      (Phase 4–5)
+└─ apps/        api · worker · mcp
 ```
 
-Decision records live in [`docs/adr/`](docs/adr/).
+| | |
+|---|---|
+| [`docs/adr/`](docs/adr/) | 16 decision records, including the ones that turned out wrong |
+| [`docs/diagrams/`](docs/diagrams/) | Request path, the decision, ingestion, trust boundaries |
+| [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | Assets, six adversaries, evidence per mitigation, and what is out of scope |
+| [`docs/ABLATION.md`](docs/ABLATION.md) · [`BENCHMARKS.md`](docs/BENCHMARKS.md) · [`LOAD.md`](docs/LOAD.md) | Generated, not hand-written |
+| [`docs/writeups/`](docs/writeups/) | Three long-form pieces on the results that surprised me |
+| [`CHANGELOG.md`](CHANGELOG.md) | Per phase: what was added, measured, and **disproved** |
 
 ## License
 

@@ -98,7 +98,21 @@ async def principal_session(
 
 @asynccontextmanager
 async def admin_session() -> AsyncIterator[AsyncSession]:
-    """Open an unfiltered transaction as the table owner. Ingestion and migrations only."""
+    """Open an unfiltered transaction as the table owner. Bypasses row-level security.
+
+    Not only ingestion and migrations, despite what an earlier version of this docstring
+    claimed. Three parts of the *request* path use it, and each is a deliberate choice
+    worth knowing about:
+
+    * the `count_withheld` baseline, which must be genuinely unfiltered or the count of
+      denied rows silently under-reports every denial the policy caused;
+    * the query cache, which holds chunk ids and entitlement hashes but no content;
+    * `/api/jobs`, gated on the `gatekeeper.admin` claim.
+
+    Chunk *content* is never read through this connection. But the API process does hold
+    an RLS-bypassing credential, which bounds what a compromise of that process costs —
+    see `docs/THREAT_MODEL.md`, adversary A3.
+    """
     session_factory = async_sessionmaker(owner_engine(), expire_on_commit=False)
     async with session_factory() as session, session.begin():
         yield session
