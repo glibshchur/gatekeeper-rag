@@ -27,6 +27,9 @@ dependencies = [
     "uvicorn[standard]>=0.34.0",
     "mcp>=2.1.1",
     "pyjwt[crypto]>=2.13.0",
+    "arq>=0.28.0",
+    "opentelemetry-sdk>=1.44.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.44.0",
 ]
 
 [project.optional-dependencies]

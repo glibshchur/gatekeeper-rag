@@ -107,3 +107,17 @@ test-all: ## Full suite including RLS integration tests (needs docker)
 	uv run pytest -q
 
 .PHONY: help install up down nuke migrate migrate-check fetch seed index repair reacl stats eval injection rescan cache-purge redteam redteam-indirect bench verify-audit ask ui mcp token whoami bootstrap lint fmt test test-all
+
+worker: ## Run the background ingestion worker (arq over Redis)
+	uv run gatekeeper worker
+
+jobs: ## List recent ingestion jobs
+	uv run gatekeeper jobs list
+
+load: ## Concurrency sweep; writes docs/LOAD.md
+	uv run gatekeeper load
+
+trace: ## Start Jaeger, then run anything with GK_OTEL_ENDPOINT=http://localhost:4317
+	docker compose --profile observability up -d jaeger
+	@echo "Jaeger UI: http://localhost:16686"
+	@echo "Then e.g.: GK_OTEL_ENDPOINT=http://localhost:4317 make ask Q=\"expense limit?\" WHO=dana"

@@ -48,6 +48,18 @@ services:
       retries: 20
     profiles: ["core"]
 
+  # Opt-in: `docker compose --profile observability up -d jaeger`. Deliberately not in
+  # the `core` profile -- tracing is off unless GK_OTEL_ENDPOINT is set, and the default
+  # `make bootstrap` should not require a collector to be running.
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"  # UI
+      - "4317:4317"    # OTLP gRPC -- the endpoint GK_OTEL_ENDPOINT points at
+    profiles: ["observability"]
+
 volumes:
   pgdata:
   miniodata:

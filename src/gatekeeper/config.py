@@ -54,6 +54,10 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Tracing is off unless this is set. See `gatekeeper.core.telemetry` for why spans
+    # carry shapes and never contents.
+    otel_endpoint: str | None = None
+
     corpus_dir: Path = Field(default=REPO_ROOT / "corpus" / "sources")
     acl_rules_path: Path = Field(default=REPO_ROOT / "corpus" / "acl_rules.yaml")
 

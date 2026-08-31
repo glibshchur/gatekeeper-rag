@@ -20,6 +20,7 @@ from uuid import UUID
 from sqlalchemy import or_, select, text
 
 from gatekeeper.core import audit as audit_log
+from gatekeeper.core import telemetry
 from gatekeeper.core.db import admin_session, principal_session
 from gatekeeper.core.models import Chunk, Document
 from gatekeeper.redteam.injection import FLAG_THRESHOLD
@@ -302,8 +303,50 @@ async def search(
     an audit trail with holes in it. Pass ``audit=False`` only for benchmarking, where
     the chain's advisory lock would serialise concurrent probes and measure itself.
     """
+    with telemetry.span(
+        "search",
+        **telemetry.principal_attrs(principal),
+        **{
+            "retrieval.config": "dense",
+            "retrieval.k": k,
+            "search.ef_search": ef_search,
+            "query.chars": len(query),
+            "query.terms": len(query.split()),
+        },
+    ) as root:
+        result = await _search(
+            principal,
+            query,
+            embedder,
+            k=k,
+            ef_search=ef_search,
+            count_withheld=count_withheld,
+            audit=audit,
+        )
+        telemetry.set_attributes(
+            root,
+            **{
+                "retrieval.returned": len(result.chunks),
+                "retrieval.withheld": result.withheld,
+                "retrieval.latency_ms": result.latency_ms,
+            },
+        )
+        return result
+
+
+async def _search(
+    principal: Principal,
+    query: str,
+    embedder: Embedder,
+    *,
+    k: int = 10,
+    ef_search: int = DEFAULT_EF_SEARCH,
+    count_withheld: bool = False,
+    audit: bool = True,
+) -> SearchResult:
     started = time.monotonic()
-    query_vector = embedder.encode_query(query).tolist()
+    with telemetry.span("embed.query", **{"embedding.model": embedder.space.model}):
+        query_vector = embedder.encode_query(query).tolist()
 
     # Computed before the principal transaction so the denied ids can be written into
     # the audit entry from inside it. Scoped to the principal's own tenant: comparing
@@ -311,26 +354,31 @@ async def search(
     # turns a transparency feature into a side channel disclosing other corpora exist.
     unfiltered: list[RetrievedChunk] = []
     if count_withheld:
-        async with admin_session() as session:
-            unfiltered = await _ann_query(
+        # Its own span because it is not free: the first trace showed this unfiltered
+        # baseline costing more than the authorized query it is compared against, which
+        # is worth knowing before enabling `count_withheld` on a hot path.
+        with telemetry.span("search.withheld_baseline"):
+            async with admin_session() as session:
+                unfiltered = await _ann_query(
+                    session,
+                    embedder=embedder,
+                    query_vector=query_vector,
+                    k=k,
+                    ef_search=ef_search,
+                    tenant_id=principal.tenant_id,
+                )
+
+    async with principal_session(principal) as session:
+        with telemetry.span("search.dense", **{"search.ef_search": ef_search}):
+            chunks = await _ann_query(
                 session,
                 embedder=embedder,
                 query_vector=query_vector,
                 k=k,
                 ef_search=ef_search,
                 tenant_id=principal.tenant_id,
+                principal=principal,
             )
-
-    async with principal_session(principal) as session:
-        chunks = await _ann_query(
-            session,
-            embedder=embedder,
-            query_vector=query_vector,
-            k=k,
-            ef_search=ef_search,
-            tenant_id=principal.tenant_id,
-            principal=principal,
-        )
 
         withheld: int | None = None
         denied_docs: list[UUID] = []
@@ -345,15 +393,16 @@ async def search(
         if audit:
             # Same transaction as the query: the record and the read it describes commit
             # together, or neither does.
-            await audit_log.append(
-                session,
-                principal,
-                action="search",
-                query_text=query,
-                retrieved=sorted({UUID(c.document_id) for c in chunks}),
-                denied=denied_docs,
-                latency_ms=latency_ms,
-            )
+            with telemetry.span("audit.append"):
+                await audit_log.append(
+                    session,
+                    principal,
+                    action="search",
+                    query_text=query,
+                    retrieved=sorted({UUID(c.document_id) for c in chunks}),
+                    denied=denied_docs,
+                    latency_ms=latency_ms,
+                )
 
     return SearchResult(
         query=query,

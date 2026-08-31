@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from gatekeeper.core import audit as audit_log
+from gatekeeper.core import telemetry
 from gatekeeper.core.db import admin_session, principal_session
 from gatekeeper.retrieval import cache as query_cache
 from gatekeeper.retrieval.fusion import DEFAULT_RRF_K, reciprocal_rank_fusion
@@ -113,19 +114,79 @@ async def retrieve(
     `reranker` is injected rather than constructed here: loading the cross-encoder takes
     seconds, and an ablation that reloaded it per arm would spend most of its time in
     model initialisation and report the difference as latency.
+
+    This wrapper exists only to own the root span. Wrapping rather than indenting the
+    body keeps the pipeline readable as a pipeline -- the stages stay at one level, and
+    the tracing is a ring around them rather than a nesting inside them. Note what the
+    span records: the query's *length*, never its text. See `core.telemetry`.
     """
+    with telemetry.span(
+        "retrieve",
+        **telemetry.principal_attrs(principal),
+        **{
+            "retrieval.config": config.name,
+            "retrieval.k": k,
+            "query.chars": len(query),
+            "query.terms": len(query.split()),
+        },
+    ) as root:
+        result = await _retrieve(
+            principal,
+            query,
+            embedder,
+            config=config,
+            k=k,
+            reranker=reranker,
+            count_withheld=count_withheld,
+            audit=audit,
+            use_cache=use_cache,
+        )
+        telemetry.set_attributes(
+            root,
+            **{
+                "retrieval.returned": len(result.chunks),
+                "retrieval.withheld": result.withheld,
+                "retrieval.cached": result.cached,
+                "retrieval.latency_ms": result.latency_ms,
+            },
+        )
+        return result
+
+
+async def _retrieve(
+    principal: Principal,
+    query: str,
+    embedder: Embedder,
+    *,
+    config: RetrievalConfig = DEFAULT_CONFIG,
+    k: int = 10,
+    reranker: CrossEncoderReranker | None = None,
+    count_withheld: bool = False,
+    audit: bool = True,
+    use_cache: bool = False,
+) -> SearchResult:
     if config.rerank and reranker is None:
         raise ValueError(f"config {config.name!r} needs a reranker, none was provided")
 
     started = time.monotonic()
-    query_vector = embedder.encode_query(query).tolist() if config.dense else None
+    with telemetry.span("embed.query", **{"embedding.model": embedder.space.model}):
+        query_vector = embedder.encode_query(query).tolist() if config.dense else None
 
     # The cache is off by default. It is safe -- a hit is re-authorized by `fetch_by_ids`
     # -- but a semantic cache can answer a *similar* question rather than the one asked,
     # and that is a correctness trade a caller should opt into rather than inherit.
     if use_cache and query_vector is not None:
-        epoch = await query_cache.current_epoch()
-        hit = await query_cache.lookup(principal, query_vector, embedder, epoch)
+        with telemetry.span("cache.lookup") as cache_span:
+            epoch = await query_cache.current_epoch()
+            hit = await query_cache.lookup(principal, query_vector, embedder, epoch)
+            telemetry.set_attributes(
+                cache_span,
+                **{
+                    "cache.hit": hit is not None,
+                    "cache.similarity": round(hit.similarity, 4) if hit else None,
+                    "cache.epoch": epoch,
+                },
+            )
         if hit is not None:
             async with principal_session(principal) as session:
                 chunks = await fetch_by_ids(session, hit.chunk_ids, principal)
@@ -168,35 +229,39 @@ async def retrieve(
     async with principal_session(principal) as session:
         rankings: list[list[RetrievedChunk]] = []
         if query_vector is not None:
-            rankings.append(
-                await _ann_query(
-                    session,
-                    embedder=embedder,
-                    query_vector=query_vector,
-                    k=config.candidates,
-                    ef_search=config.ef_search,
-                    tenant_id=principal.tenant_id,
-                    principal=principal,
+            with telemetry.span("search.dense", **{"search.ef_search": config.ef_search}):
+                rankings.append(
+                    await _ann_query(
+                        session,
+                        embedder=embedder,
+                        query_vector=query_vector,
+                        k=config.candidates,
+                        ef_search=config.ef_search,
+                        tenant_id=principal.tenant_id,
+                        principal=principal,
+                    )
                 )
-            )
         if config.lexical:
-            rankings.append(
-                await lexical_topk(
-                    session,
-                    query,
-                    k=config.candidates,
-                    tenant_id=principal.tenant_id,
-                    principal=principal,
+            with telemetry.span("search.lexical"):
+                rankings.append(
+                    await lexical_topk(
+                        session,
+                        query,
+                        k=config.candidates,
+                        tenant_id=principal.tenant_id,
+                        principal=principal,
+                    )
                 )
-            )
 
         if len(rankings) > 1:
-            candidates = reciprocal_rank_fusion(rankings, rrf_k=config.rrf_k)
+            with telemetry.span("fusion.rrf", **{"fusion.arms": len(rankings)}):
+                candidates = reciprocal_rank_fusion(rankings, rrf_k=config.rrf_k)
         else:
             candidates = list(rankings[0])
 
         if config.rerank and reranker is not None:
-            candidates = reranker.rerank(query, candidates[: config.rerank_candidates], top_k=k)
+            with telemetry.span("rerank.cross_encoder", **{"rerank.pool": len(candidates)}):
+                candidates = reranker.rerank(query, candidates[: config.rerank_candidates], top_k=k)
 
         chunks = candidates[:k]
 

@@ -176,3 +176,23 @@ def test_dev_tokens_cannot_be_minted_in_oidc_mode(monkeypatch: pytest.MonkeyPatc
     get_settings.cache_clear()
     with pytest.raises(auth.AuthError, match="dev auth mode"):
         auth.issue_dev_token("raj")
+
+
+def test_privileges_are_off_unless_the_claim_is_present() -> None:
+    """Both privilege claims default to absent. A token that says nothing grants nothing."""
+    identity = auth.verify(auth.issue_dev_token("raj"))
+    assert identity.can_impersonate is False
+    assert identity.can_administer is False
+
+
+def test_impersonation_and_administration_are_separate_powers() -> None:
+    """Reading the ingest queue and answering as someone else are different capabilities,
+    and holding one must not confer the other -- the job list names document paths, which
+    is a corpus-shape disclosure that has nothing to do with side-by-side comparison."""
+    impersonator = auth.verify(auth.issue_dev_token("raj", can_impersonate=True))
+    assert impersonator.can_impersonate is True
+    assert impersonator.can_administer is False
+
+    operator = auth.verify(auth.issue_dev_token("raj", can_administer=True))
+    assert operator.can_administer is True
+    assert operator.can_impersonate is False

@@ -24,6 +24,7 @@ not cleared to see — and the query layer connects as a role that *cannot* bypa
 | nDCG@10 on 58 hand-written questions (`dense+rerank`) | **0.796** |
 | Retrieval latency p50, dense / dense+rerank | **8 ms / 215 ms** |
 | Recall@10 vs exact brute force, `ef_search=200` | **1.000** |
+| RLS-filtered ANN throughput, 64 concurrent, auditing on | **1,207 q/s** |
 
 The authorization numbers come from [`src/gatekeeper/redteam/`](src/gatekeeper/redteam/),
 which scores the SQL policy against a **separate Python implementation of the same written
@@ -54,6 +55,13 @@ as prominently as the positive ones:
 - **Embedding similarity cannot see numbers.** A groundedness check built on it alone rates
   a tenfold error in an expense limit as supported — in a corpus that is nothing but
   thresholds ([ADR 0012](docs/adr/0012-groundedness-needs-two-layers.md)).
+- **Turning the audit chain off made tail latency three times *worse*.** Throughput rose
+  45%, p99 went from 361 ms to 992 ms: the advisory lock was pacing the pipeline
+  ([ADR 0016](docs/adr/0016-the-bottleneck-is-the-embedder.md)).
+- **A background job reported `succeeded` while silently failing to index a document**,
+  because `index_one` returned the same value for "unchanged" and "the file is gone". Found
+  by hiding a source file and watching the job pass
+  ([ADR 0014](docs/adr/0014-jobs-are-rows-not-just-messages.md)).
 
 ---
 
@@ -157,6 +165,30 @@ asked as Mira Lindqvist — CFO  clearance=3 groups=all-employees, finance, exec
 ```
 
 Raj is not filtered out of a list he was shown. The row never leaves Postgres.
+
+## What Phase 5 delivers
+
+- **Bearer-token authentication** on the console — HS256 for local development, RS256
+  against a JWKS endpoint for OIDC. A verified token establishes a *subject* and nothing
+  else: groups, clearance and need-to-know are read from the database every time, so a
+  forged claim cannot invent an entitlement
+  ([ADR 0013](docs/adr/0013-tokens-assert-identity-not-entitlement.md)).
+- **Background ingestion** (`make worker`, `gatekeeper jobs`) — arq over the Redis that had
+  been idle since Phase 0. The queue message carries only a job id; every parameter and all
+  progress lives in an `ingest_jobs` row, so a stuck reindex is debuggable with a `SELECT`.
+  Per-document transactions mean one bad document costs one document, not the
+  forty-minute run it used to cost. Retry re-enqueues only what failed
+  ([ADR 0014](docs/adr/0014-jobs-are-rows-not-just-messages.md)).
+- **Tracing that cannot become a side channel** (`GK_OTEL_ENDPOINT`, `--profile
+  observability`). Spans carry the query's *length*, never its text; the entitlement
+  fingerprint, never the principal. A test walks the AST of every module and fails if any
+  span names a content-bearing attribute
+  ([ADR 0015](docs/adr/0015-traces-carry-shapes-not-contents.md)).
+- **A concurrency sweep with its own control** (`make load`, [`docs/LOAD.md`](docs/LOAD.md)).
+  The authorized database path sustains **1,207 q/s** at concurrency 64 over 73,801 chunks
+  with auditing on; the full request path caps at 201. **The bottleneck is the co-located
+  embedding model, not row-level security** — a six-fold gap that the unqualified number
+  would have hidden ([ADR 0016](docs/adr/0016-the-bottleneck-is-the-embedder.md)).
 
 ## What Phase 4 delivers so far
 

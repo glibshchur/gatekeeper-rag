@@ -9,9 +9,10 @@ from typing import Annotated, Any
 import typer
 from rich.console import Console
 from rich.table import Table
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, select
 
 from gatekeeper.config import get_settings
+from gatekeeper.core import telemetry
 from gatekeeper.core.db import admin_session, dispose_engines, principal_session
 from gatekeeper.core.models import Chunk, Document
 from gatekeeper.core.principal import Principal
@@ -34,6 +35,9 @@ console = Console()
 
 
 def _run[T](coro: Coroutine[Any, Any, T]) -> T:
+    # Every CLI command is one process, so configuring tracing here covers all of them.
+    # A no-op unless GK_OTEL_ENDPOINT is set.
+    telemetry.configure()
     """Run one coroutine and always tear the connection pools down after it."""
 
     async def wrapper() -> T:
@@ -167,8 +171,20 @@ def index_build(
     target_tokens: Annotated[int, typer.Option(help="0 = derive from the backend")] = 0,
     overlap_tokens: int = 64,
     force: Annotated[bool, typer.Option(help="re-chunk and re-embed everything")] = False,
+    background: Annotated[
+        bool, typer.Option(help="enqueue for the worker instead of running inline")
+    ] = False,
 ) -> None:
     """Chunk and embed the loaded corpus. Idempotent: unchanged documents are skipped."""
+    if background:
+        from gatekeeper.apps.worker.enqueue import enqueue_ingest
+
+        job_id = _run(enqueue_ingest(seed.TENANT_SLUG, force=force))
+        console.print(
+            f"enqueued job [cyan]{str(job_id)[:8]}[/cyan] — follow with `gatekeeper jobs list`"
+        )
+        return
+
     settings = get_settings()
     embedder = build_embedder(backend or settings.embedding_backend, settings.openai_api_key)
     console.print(
@@ -724,6 +740,181 @@ def cache_stats() -> None:
     table.add_row("reachable (current epoch)", f"{live:,}")
     table.add_row("total hits served", f"{hits:,}")
     console.print(table)
+
+
+@app.command("load")
+def load_test(
+    levels: Annotated[
+        str, typer.Option(help="comma-separated concurrency levels")
+    ] = "1,2,4,8,16,32",
+    seconds: Annotated[float, typer.Option(help="seconds per level")] = 10.0,
+    k: int = 10,
+    out: Annotated[str, typer.Option(help="write the markdown report here")] = "docs/LOAD.md",
+) -> None:
+    """Drive concurrent authorized retrieval and publish throughput and tail latency."""
+    from pathlib import Path
+
+    from gatekeeper.evals import load as load_eval
+
+    settings = get_settings()
+    embedder = build_embedder(settings.embedding_backend, settings.openai_api_key)
+    parsed = tuple(int(x) for x in levels.split(",") if x.strip())
+
+    async def go() -> tuple[list[load_eval.LoadResult], int]:
+        results = await load_eval.sweep(embedder, levels=parsed, seconds=seconds, k=k)
+        async with admin_session() as session:
+            chunks = (await session.execute(select(func.count(Chunk.id)))).scalar_one()
+        return results, int(chunks)
+
+    results, chunks = _run(go())
+
+    table = Table(title="Concurrent retrieval", title_justify="left")
+    for col in ("arm", "concurrency", "audit", "queries", "q/s", "p50", "p95", "p99", "errors"):
+        table.add_column(col, justify="right" if col not in ("audit", "arm") else "left")
+    for r in results:
+        table.add_row(
+            "[cyan]query only[/cyan]" if r.bypass_embedding else "full request",
+            str(r.concurrency),
+            "on" if r.audit else "[yellow]off[/yellow]",
+            f"{r.completed:,}",
+            f"{r.throughput:.1f}",
+            f"{r.p50:.0f} ms",
+            f"{r.p95:.0f} ms",
+            f"{r.p99:.0f} ms",
+            f"[red]{r.errors}[/red]" if r.errors else "0",
+        )
+    console.print(table)
+
+    path = Path(out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(load_eval.to_markdown(results, chunks), encoding="utf-8")
+    console.print(f"[dim]wrote {path}[/dim]")
+
+
+jobs_app = typer.Typer(no_args_is_help=True, help="Background ingestion jobs")
+app.add_typer(jobs_app, name="jobs")
+
+
+@app.command("worker")
+def worker() -> None:
+    """Run the background ingestion worker (arq over Redis)."""
+    from gatekeeper.apps.worker.main import main as run
+
+    run()
+
+
+@jobs_app.command("list")
+def jobs_list(limit: int = 10) -> None:
+    """Recent ingestion jobs."""
+    from gatekeeper.core.models import IngestJob
+
+    async def go() -> list[IngestJob]:
+        async with admin_session() as session:
+            return list(
+                (
+                    await session.execute(
+                        select(IngestJob).order_by(IngestJob.enqueued_at.desc()).limit(limit)
+                    )
+                ).scalars()
+            )
+
+    rows = _run(go())
+    if not rows:
+        console.print("[dim]no jobs[/dim]")
+        return
+    table = Table(title="Ingestion jobs", title_justify="left")
+    for col in ("id", "status", "progress", "chunks", "failures", "enqueued"):
+        table.add_column(col, justify="left" if col in ("id", "status") else "right")
+    palette = {
+        "succeeded": "green",
+        "running": "cyan",
+        "queued": "dim",
+        "partial": "yellow",
+        "failed": "red",
+    }
+    for job in rows:
+        colour = palette.get(job.status, "white")
+        table.add_row(
+            str(job.id)[:8],
+            f"[{colour}]{job.status}[/{colour}]",
+            f"{job.done:,}/{job.total:,}" if job.total else "-",
+            f"{job.chunks_written:,}",
+            f"{len(job.failures)}" if job.failures else "-",
+            job.enqueued_at.strftime("%H:%M:%S"),
+        )
+    console.print(table)
+
+
+@jobs_app.command("show")
+def jobs_show(job_id: str) -> None:
+    """One job, including the documents that failed."""
+    from gatekeeper.core.models import IngestJob
+
+    async def go() -> IngestJob | None:
+        async with admin_session() as session:
+            return (
+                (
+                    await session.execute(
+                        select(IngestJob).where(cast(IngestJob.id, String).like(f"{job_id}%"))
+                    )
+                )
+                .scalars()
+                .first()
+            )
+
+    job = _run(go())
+    if job is None:
+        console.print(f"[red]no job matching {job_id!r}[/red]")
+        raise typer.Exit(1)
+
+    table = Table(title=f"Job {job.id}", title_justify="left", show_header=False)
+    table.add_row("kind", job.kind)
+    table.add_row("status", job.status)
+    table.add_row("attempts", str(job.attempts))
+    table.add_row("progress", f"{job.done:,}/{job.total:,} ({job.progress:.0%})")
+    table.add_row("chunks written", f"{job.chunks_written:,}")
+    table.add_row("failures", str(len(job.failures)))
+    if job.error:
+        table.add_row("error", job.error)
+    console.print(table)
+
+    for failure in job.failures[:15]:
+        console.print(f"  [red]{failure.get('path')}[/red]")
+        console.print(f"    [dim]{failure.get('error')}[/dim]")
+    if len(job.failures) > 15:
+        console.print(f"  [dim]… and {len(job.failures) - 15} more[/dim]")
+
+
+@jobs_app.command("retry")
+def jobs_retry(job_id: str) -> None:
+    """Re-enqueue only the documents a job failed on."""
+    from gatekeeper.apps.worker.enqueue import retry_failures
+    from gatekeeper.core.models import IngestJob
+
+    async def go() -> tuple[str | None, int]:
+        async with admin_session() as session:
+            job = (
+                (
+                    await session.execute(
+                        select(IngestJob).where(cast(IngestJob.id, String).like(f"{job_id}%"))
+                    )
+                )
+                .scalars()
+                .first()
+            )
+        if job is None:
+            return None, 0
+        new_id = await retry_failures(job.id)
+        return (str(new_id) if new_id else ""), len(job.failures)
+
+    new_id, count = _run(go())
+    if new_id is None:
+        console.print(f"[red]no job matching {job_id!r}[/red]")
+        raise typer.Exit(1)
+    if not new_id:
+        console.print("[green]nothing to retry — that job had no failures[/green]")
+        return
+    console.print(f"re-enqueued {count} failed document(s) as job {new_id[:8]}")
 
 
 @app.command("token")

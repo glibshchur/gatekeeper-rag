@@ -69,6 +69,11 @@ class Identity:
     can_impersonate: bool = False
     """A privilege, carried as a claim, and audited when used. The demo console needs
     side-by-side comparison; that is a capability, not a default."""
+    can_administer: bool = False
+    """Operator plane: ingestion job status, failure lists. Separate from
+    `can_impersonate` because they are different powers -- reading the ingest queue tells
+    you which document paths exist and which failed, which is a corpus-shape disclosure
+    even though it returns no document content."""
 
 
 def _dev_secret() -> str:
@@ -82,7 +87,12 @@ def _dev_secret() -> str:
     return secret
 
 
-def issue_dev_token(subject: str, ttl_seconds: int = 3600, can_impersonate: bool = False) -> str:
+def issue_dev_token(
+    subject: str,
+    ttl_seconds: int = 3600,
+    can_impersonate: bool = False,
+    can_administer: bool = False,
+) -> str:
     """Mint a development token. Never available in oidc mode."""
     if get_settings().auth_mode != "dev":
         raise AuthError("dev tokens can only be issued in dev auth mode")
@@ -96,6 +106,8 @@ def issue_dev_token(subject: str, ttl_seconds: int = 3600, can_impersonate: bool
     }
     if can_impersonate:
         payload["gatekeeper.impersonate"] = True
+    if can_administer:
+        payload["gatekeeper.admin"] = True
     return jwt.encode(payload, _dev_secret(), algorithm="HS256")
 
 
@@ -157,6 +169,7 @@ def verify(token: str) -> Identity:
         issuer=str(claims.get("iss", "")),
         expires_at=int(claims.get("exp", 0)),
         can_impersonate=bool(claims.get("gatekeeper.impersonate", False)),
+        can_administer=bool(claims.get("gatekeeper.admin", False)),
     )
 
 

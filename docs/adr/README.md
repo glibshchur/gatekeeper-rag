@@ -23,3 +23,6 @@ useful than the reasoning that turned out to be right.
 | [0011](0011-cache-by-entitlement-not-identity.md) | The query cache is keyed by entitlement and stores decisions, not data | Accepted |
 | [0012](0012-groundedness-needs-two-layers.md) | Groundedness needs a numeric check; embeddings cannot see numbers | Accepted |
 | [0013](0013-tokens-assert-identity-not-entitlement.md) | A token asserts identity; the database owns entitlement | Accepted |
+| [0014](0014-jobs-are-rows-not-just-messages.md) | Ingestion jobs are rows; the queue only carries the id | Accepted |
+| [0015](0015-traces-carry-shapes-not-contents.md) | Traces carry shapes, never contents | Accepted |
+| [0016](0016-the-bottleneck-is-the-embedder.md) | Under load the bottleneck is the embedder, not the authorization | Accepted |

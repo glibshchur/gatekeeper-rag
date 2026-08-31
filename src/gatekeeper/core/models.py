@@ -276,3 +276,49 @@ class QueryCacheEntry(Base):
     hits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = _now()
     last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class IngestJob(Base):
+    """A unit of background ingestion work, with per-document failure isolation.
+
+    The shape is a reaction to what actually went wrong during development: a single
+    MinIO clock-skew error killed a 25-minute embedding run, and an unauthenticated
+    Hugging Face fetch stalled another. Both were transient and both cost the whole batch.
+
+    So a job is one row covering many documents, and a document that fails is recorded in
+    `failures` while the rest of the batch continues. `gatekeeper jobs retry` re-enqueues
+    only the failures — the dead-letter queue is a column, not a second system.
+    """
+
+    __tablename__ = "ingest_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'partial', 'failed')",
+            name="ck_ingest_job_status",
+        ),
+        Index("ix_ingest_jobs_status", "status", "enqueued_at"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    done: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    chunks_written: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # [{"path": ..., "error": ...}] -- the dead letters, kept next to the job that
+    # produced them so a retry knows exactly what to re-run.
+    failures: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+
+    enqueued_at: Mapped[datetime] = _now()
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @property
+    def progress(self) -> float:
+        return self.done / self.total if self.total else 0.0

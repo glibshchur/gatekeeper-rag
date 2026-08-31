@@ -20,6 +20,7 @@ outside dev mode and the page says what it is.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,7 +32,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from gatekeeper.config import get_settings
-from gatekeeper.core import auth
+from gatekeeper.core import auth, telemetry
 from gatekeeper.core.db import dispose_engines, principal_session
 from gatekeeper.core.models import Chunk, Document
 from gatekeeper.core.principal import Principal
@@ -49,6 +50,8 @@ _state: dict[str, Any] = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    if telemetry.configure():
+        logging.getLogger(__name__).info("tracing to %s", settings.otel_endpoint)
     # Loading the ONNX session takes ~18 seconds. Doing it per request would make the
     # console feel broken; doing it at startup makes the first request honest.
     _state["embedder"] = await asyncio.to_thread(
@@ -123,7 +126,7 @@ async def dev_login(request: DevLoginRequest) -> dict[str, Any]:
     try:
         # The demo console needs to compare principals, so dev tokens carry the
         # impersonation claim. A real IdP would grant it to a small set of operators.
-        token = auth.issue_dev_token(request.handle, can_impersonate=True)
+        token = auth.issue_dev_token(request.handle, can_impersonate=True, can_administer=True)
     except auth.AuthError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"token": token, "handle": request.handle, "mode": "dev"}
@@ -138,6 +141,7 @@ async def me(identity: auth.Identity = Depends(require_identity)) -> dict[str, A
         "clearance": int(principal.clearance),
         "groups": principal.groups,
         "can_impersonate": identity.can_impersonate,
+        "can_administer": identity.can_administer,
         "expires_at": identity.expires_at,
     }
 
@@ -317,6 +321,51 @@ async def _audit_impersonation(caller: Principal, targets: list[str]) -> None:
             action="impersonate",
             query_text=",".join(sorted(targets)),
         )
+
+
+@app.get("/api/jobs")
+async def jobs(
+    limit: int = 20, identity: auth.Identity = Depends(require_identity)
+) -> list[dict[str, Any]]:
+    """Ingestion jobs, newest first.
+
+    Gated on the admin claim rather than open to any authenticated caller: the failure
+    list carries document *paths*, and knowing that `finance/board-deck-q3.md` exists and
+    failed to embed is a disclosure even when its content stays behind RLS.
+    """
+    if not identity.can_administer:
+        raise HTTPException(403, "the gatekeeper.admin claim is required")
+
+    from sqlalchemy import select
+
+    from gatekeeper.core.db import admin_session
+    from gatekeeper.core.models import IngestJob
+
+    async with admin_session() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(IngestJob).order_by(IngestJob.enqueued_at.desc()).limit(min(limit, 100))
+                )
+            ).scalars()
+        )
+    return [
+        {
+            "id": str(job.id),
+            "kind": job.kind,
+            "status": job.status,
+            "attempts": job.attempts,
+            "total": job.total,
+            "done": job.done,
+            "progress": round(job.progress, 4),
+            "chunks_written": job.chunks_written,
+            "failures": job.failures,
+            "error": job.error,
+            "enqueued_at": job.enqueued_at.isoformat(),
+            "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        }
+        for job in rows
+    ]
 
 
 @app.get("/")

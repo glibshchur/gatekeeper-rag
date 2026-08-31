@@ -19,10 +19,9 @@ from __future__ import annotations
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from gatekeeper.retrieval.search import RetrievedChunk
+from gatekeeper.core import telemetry
+from gatekeeper.retrieval.search import RetrievedChunk
 
 SYSTEM_PROMPT = """You answer questions about internal company policy using only the \
 numbered sources provided.
@@ -105,9 +104,21 @@ class Generator(ABC):
                 sources=[],
                 model=self.model,
             )
-        body, in_tokens, out_tokens = self.complete(
-            SYSTEM_PROMPT, build_user_prompt(question, chunks)
-        )
+        with telemetry.span(
+            "generate.answer",
+            **{"llm.model": self.model, "generate.sources": len(chunks)},
+        ) as span:
+            body, in_tokens, out_tokens = self.complete(
+                SYSTEM_PROMPT, build_user_prompt(question, chunks)
+            )
+            telemetry.set_attributes(
+                span,
+                **{
+                    "llm.input_tokens": in_tokens,
+                    "llm.output_tokens": out_tokens,
+                    "generate.answer_chars": len(body),
+                },
+            )
         return Answer(
             text=body,
             sources=chunks,

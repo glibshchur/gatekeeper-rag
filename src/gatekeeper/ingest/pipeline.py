@@ -34,6 +34,13 @@ class IndexReport:
     documents_seen: int = 0
     documents_indexed: int = 0
     documents_skipped: int = 0
+    missing_sources: int = 0
+    """Documents the database knows about whose file is gone from the clone.
+
+    Counted separately from `documents_skipped` because they mean opposite things. A skip
+    is the incremental path working; a missing source is the corpus on disk disagreeing
+    with the corpus in the database, and folding it into the skip count let a background
+    job report `succeeded` while a document silently went unindexed."""
     chunks_written: int = 0
     oversized_chunks: int = 0
     flagged_chunks: int = 0
@@ -47,6 +54,7 @@ class IndexReport:
             ("documents seen", f"{self.documents_seen:,}"),
             ("documents indexed", f"{self.documents_indexed:,}"),
             ("documents skipped (unchanged)", f"{self.documents_skipped:,}"),
+            ("documents with a missing source file", f"{self.missing_sources:,}"),
             ("chunks written", f"{self.chunks_written:,}"),
             ("oversized chunks", f"{self.oversized_chunks:,}"),
             ("chunks with ACL overrides", f"{self.override_chunks:,}"),
@@ -112,7 +120,8 @@ async def build_index(
         window = documents[start : start + batch_documents]
         async with admin_session() as session:
             for document in window:
-                written = await _index_one(
+                missing_before = report.missing_sources
+                written = await index_one(
                     session=session,
                     document=document,
                     tenant_slug=tenant_slug,
@@ -126,7 +135,7 @@ async def build_index(
                 )
                 if written:
                     report.documents_indexed += 1
-                else:
+                elif report.missing_sources == missing_before:
                     report.documents_skipped += 1
         logger.info(
             "indexed %d/%d documents (%d chunks)",
@@ -138,7 +147,7 @@ async def build_index(
     return report
 
 
-async def _index_one(
+async def index_one(
     *,
     session: AsyncSession,
     document: Document,
@@ -170,6 +179,7 @@ async def _index_one(
     source_file = content_root / document.path
     if not source_file.is_file():
         logger.warning("missing source file for %s", document.path)
+        report.missing_sources += 1
         return False
 
     raw = source_file.read_bytes()
