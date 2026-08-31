@@ -20,3 +20,5 @@ useful than the reasoning that turned out to be right.
 | [0008](0008-hybrid-search-measured-and-disabled.md) | Hybrid search: built, measured, and off by default | Accepted |
 | [0009](0009-mcp-surface-and-one-principal-per-process.md) | MCP: one principal per process; withheld results are counts | Accepted |
 | [0010](0010-injection-detection-is-the-second-line.md) | Injection detection is the second line; the semantic layer did not work | Accepted |
+| [0011](0011-cache-by-entitlement-not-identity.md) | The query cache is keyed by entitlement and stores decisions, not data | Accepted |
+| [0012](0012-groundedness-needs-two-layers.md) | Groundedness needs a numeric check; embeddings cannot see numbers | Accepted |

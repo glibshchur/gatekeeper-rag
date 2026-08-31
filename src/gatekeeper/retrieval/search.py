@@ -68,6 +68,10 @@ class SearchResult:
     chunks: list[RetrievedChunk]
     latency_ms: int
     withheld: int | None = None
+    cached: bool = False
+    cached_query: str | None = None
+    """The query whose results were reused. Surfaced rather than hidden: a semantic cache
+    can answer a question nobody asked, and the only defence is being able to see it."""
     """Chunks that would have ranked in the top-k but were removed by authorization.
 
     Computed only when explicitly requested, because it costs a second query on the admin
@@ -196,6 +200,62 @@ async def _ann_query(
         )
         for row in rows
     ]
+
+
+async def fetch_by_ids(
+    session: AsyncSession, chunk_ids: list[UUID], principal: Principal
+) -> list[RetrievedChunk]:
+    """Re-fetch specific chunks, in the given order, through the principal's session.
+
+    This is what makes the query cache safe. A cache hit hands back ids, and those ids go
+    through RLS again here -- so an entry that should never have matched this principal
+    still cannot produce a row they are not entitled to. The cache is an optimisation on
+    *which* rows to ask for, never on whether they are allowed.
+    """
+    if not chunk_ids:
+        return []
+    stmt = (
+        select(
+            Chunk.id,
+            Chunk.document_id,
+            Document.title,
+            Document.path,
+            Document.source_uri,
+            Chunk.heading_path,
+            Chunk.content,
+            Chunk.sensitivity,
+            Chunk.injection_score,
+            Chunk.injection_signals,
+        )
+        .join(Document, Document.id == Chunk.document_id)
+        .where(Chunk.id.in_(chunk_ids))
+        .where(*coarse_predicate(Chunk, principal))
+    )
+    rows = {row.id: row for row in (await session.execute(stmt)).all()}
+    out: list[RetrievedChunk] = []
+    for index, chunk_id in enumerate(chunk_ids):
+        row = rows.get(chunk_id)
+        if row is None:
+            # Either the chunk was deleted or the policy denies it now. Both are normal.
+            continue
+        out.append(
+            RetrievedChunk(
+                chunk_id=str(row.id),
+                document_id=str(row.document_id),
+                title=row.title,
+                path=row.path,
+                source_uri=row.source_uri,
+                heading_path=list(row.heading_path),
+                content=row.content,
+                # Rank order is preserved from the cached decision; the original scores
+                # are not stored, and inventing one would be worse than saying so.
+                score=1.0 / (1 + index),
+                sensitivity=row.sensitivity,
+                injection_score=float(row.injection_score),
+                injection_signals=tuple(row.injection_signals),
+            )
+        )
+    return out
 
 
 async def unfiltered_candidates(

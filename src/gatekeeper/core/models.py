@@ -233,3 +233,46 @@ class AuditEntry(Base):
 
     prev_hash: Mapped[str | None] = mapped_column(String(64))
     entry_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class CacheEpoch(Base):
+    """Monotonic counter retiring the query cache when visibility changes.
+
+    A row per bump, with a reason, rather than a single mutable value: knowing *why* the
+    cache was retired is what lets you tell a policy change apart from a reindex when the
+    hit rate collapses.
+    """
+
+    __tablename__ = "cache_epochs"
+
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = _now()
+
+
+class QueryCacheEntry(Base):
+    """One cached retrieval decision, scoped to an entitlement fingerprint.
+
+    Stores chunk *ids*, never content: a hit re-fetches them through RLS, so the cache
+    cannot become a copy of the corpus that lives outside the access model. See
+    `gatekeeper.retrieval.cache` for the reasoning.
+    """
+
+    __tablename__ = "query_cache"
+    __table_args__ = (
+        Index("ix_query_cache_fingerprint", "fingerprint"),
+        Index("ix_query_cache_epoch", "epoch"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False, default=list
+    )
+    embedding_384: Mapped[list[float] | None] = mapped_column(HALFVEC(384))
+    embedding_model: Mapped[str] = mapped_column(Text, nullable=False)
+    hits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = _now()
+    last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -23,6 +23,18 @@ nuke: ## Stop infrastructure and destroy all data
 migrate: ## Run database migrations (as the owner role)
 	uv run alembic upgrade head
 
+migrate-check: ## Verify migrations are reversible, against a scratch DB
+	@# Never the live database. `alembic downgrade base` drops every table, and running
+	@# it against the working DB once cost a 40-minute reindex.
+	docker compose exec -T postgres psql -qU postgres -d postgres \
+	  -c "DROP DATABASE IF EXISTS gk_migrate_check" -c "CREATE DATABASE gk_migrate_check"
+	GK_DATABASE_OWNER_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/gk_migrate_check \
+	GK_DATABASE_URL=postgresql+asyncpg://gatekeeper_app:gatekeeper_app@localhost:5433/gk_migrate_check \
+	  sh -c 'uv run alembic upgrade head && uv run alembic downgrade base && uv run alembic upgrade head'
+	docker compose exec -T postgres psql -qU postgres -d postgres \
+	  -c "DROP DATABASE gk_migrate_check"
+	@echo "migrations round-trip cleanly"
+
 fetch: ## Clone the GitLab handbook corpus into corpus/sources/
 	uv run gatekeeper corpus fetch
 
@@ -46,6 +58,9 @@ eval: ## Run the retrieval ablation over the golden set; writes docs/ABLATION.md
 
 injection: ## Score the injection classifier: detection and false-positive rate
 	uv run gatekeeper injection
+
+cache-purge: ## Drop query-cache entries from retired visibility epochs
+	uv run gatekeeper cache purge
 
 rescan: ## Re-score every chunk against the current injection rules
 	uv run gatekeeper index rescan
@@ -88,4 +103,4 @@ test: ## Unit tests only (no docker required)
 test-all: ## Full suite including RLS integration tests (needs docker)
 	uv run pytest -q
 
-.PHONY: help install up down nuke migrate fetch seed index repair reacl stats eval injection rescan redteam redteam-indirect bench verify-audit ask ui mcp whoami bootstrap lint fmt test test-all
+.PHONY: help install up down nuke migrate migrate-check fetch seed index repair reacl stats eval injection rescan cache-purge redteam redteam-indirect bench verify-audit ask ui mcp whoami bootstrap lint fmt test test-all

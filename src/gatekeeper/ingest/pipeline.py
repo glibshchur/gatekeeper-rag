@@ -24,6 +24,7 @@ from gatekeeper.ingest.acl import AclRuleSet, ResolvedAcl, load_rules
 from gatekeeper.ingest.chunking import chunk_markdown
 from gatekeeper.llm.embeddings import Embedder
 from gatekeeper.redteam.injection import RuleScorer
+from gatekeeper.retrieval.cache import bump_epoch
 
 logger = logging.getLogger(__name__)
 
@@ -354,6 +355,10 @@ async def rescan_injection(tenant_slug: str) -> dict[str, int]:
                 stats["flagged"] += 1
             if verdict.quarantined:
                 stats["quarantined"] += 1
+    # Chunk ACLs just changed, so every cached retrieval decision is potentially stale.
+    # This is the case a timestamp-derived epoch would have missed: reacl rewrites ACLs
+    # without touching any `updated_at`.
+    await bump_epoch("index reacl")
     return stats
 
 

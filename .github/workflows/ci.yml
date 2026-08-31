@@ -56,6 +56,10 @@ jobs:
       - name: Verify migrations are reversible
         # A downgrade that does not work is a downgrade that will not be there when it
         # is needed, which for the RLS migration means no way to recover a broken policy.
+        #
+        # Safe here because CI's database is disposable. Locally use `make migrate-check`,
+        # which builds a scratch database: running `downgrade base` against a working DB
+        # drops every table, and doing it once cost a 40-minute reindex.
         run: |
           uv run alembic downgrade base
           uv run alembic upgrade head

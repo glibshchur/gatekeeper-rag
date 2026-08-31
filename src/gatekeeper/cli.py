@@ -27,6 +27,8 @@ index_app = typer.Typer(no_args_is_help=True, help="Chunk, embed, and index docu
 app.add_typer(corpus_app, name="corpus")
 app.add_typer(principals_app, name="principals")
 app.add_typer(index_app, name="index")
+cache_app = typer.Typer(no_args_is_help=True, help="Inspect and purge the query cache")
+app.add_typer(cache_app, name="cache")
 
 console = Console()
 
@@ -672,6 +674,58 @@ def audit_verify() -> None:
     console.print(f"[green]audit chain intact[/green] — {verified:,} entries verified")
 
 
+@cache_app.command("purge")
+def cache_purge(
+    all_epochs: Annotated[
+        bool, typer.Option("--all", help="drop every entry, not just retired ones")
+    ] = False,
+) -> None:
+    """Delete query-cache entries from retired visibility epochs.
+
+    Never required for correctness: the epoch is inside the fingerprint hash, so a retired
+    entry is already unreachable. This only reclaims space.
+    """
+    from gatekeeper.retrieval import cache as query_cache
+
+    removed = _run(query_cache.purge(keep_current=not all_epochs))
+    console.print(f"removed {removed:,} cache entr{'y' if removed == 1 else 'ies'}")
+
+
+@cache_app.command("stats")
+def cache_stats() -> None:
+    """Entries, hits and epochs."""
+    from gatekeeper.core.models import CacheEpoch, QueryCacheEntry
+
+    async def go() -> tuple[int, int, int, int, str]:
+        from gatekeeper.retrieval import cache as query_cache
+
+        epoch = await query_cache.current_epoch()
+        async with admin_session() as session:
+            entries = (await session.execute(select(func.count(QueryCacheEntry.id)))).scalar_one()
+            live = (
+                await session.execute(
+                    select(func.count(QueryCacheEntry.id)).where(QueryCacheEntry.epoch == epoch)
+                )
+            ).scalar_one()
+            hits = (
+                await session.execute(select(func.coalesce(func.sum(QueryCacheEntry.hits), 0)))
+            ).scalar_one()
+            reason = (
+                await session.execute(
+                    select(CacheEpoch.reason).order_by(CacheEpoch.epoch.desc()).limit(1)
+                )
+            ).scalar_one_or_none()
+        return epoch, entries, live, int(hits), reason or "-"
+
+    epoch, entries, live, hits, reason = _run(go())
+    table = Table(title="Query cache", title_justify="left", show_header=False)
+    table.add_row("visibility epoch", f"{epoch} (last bumped by: {reason})")
+    table.add_row("entries", f"{entries:,}")
+    table.add_row("reachable (current epoch)", f"{live:,}")
+    table.add_row("total hits served", f"{hits:,}")
+    console.print(table)
+
+
 @app.command("mcp")
 def mcp(
     who: Annotated[str, typer.Option("--as", help="principal handle to bind this server to")] = "",
@@ -750,8 +804,16 @@ def ask(
         console.print(answer.text)
         if not answer.is_grounded:
             console.print("\n[yellow]⚠ the model cited no sources; treat as ungrounded[/yellow]")
+        # Citation markers are cheap to produce and prove nothing, so the claims are
+        # checked against the sources rather than the brackets counted.
+        from gatekeeper.llm.groundedness import annotate, verify
+
+        report = verify(answer.text, result.chunks, embedder)
+        style = "dim" if report.grounded else "yellow"
+        console.print(f"\n[{style}]{annotate(report)}[/{style}]")
+
         usage = f"{answer.input_tokens:,} in / {answer.output_tokens:,} out"
-        console.print(f"\n[dim]{answer.model} · {usage}[/dim]")
+        console.print(f"[dim]{answer.model} · {usage}[/dim]")
     elif generate:
         console.print(
             "[yellow]No model provider configured — retrieval only.[/yellow] "

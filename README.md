@@ -51,6 +51,9 @@ as prominently as the positive ones:
 - **The semantic layer of the injection classifier was built, measured, and deleted.** It
   contributed nothing, and the measurement shows it could not have worked at any threshold
   ([ADR 0010](docs/adr/0010-injection-detection-is-the-second-line.md)).
+- **Embedding similarity cannot see numbers.** A groundedness check built on it alone rates
+  a tenfold error in an expense limit as supported — in a corpus that is nothing but
+  thresholds ([ADR 0012](docs/adr/0012-groundedness-needs-two-layers.md)).
 
 ---
 
@@ -168,6 +171,14 @@ Raj is not filtered out of a list he was shown. The row never leaves Postgres.
   reached the model, **0 widened access — including 2 that the classifier missed
   entirely.** That is the point: containment is structural, so it does not depend on
   detection working ([ADR 0010](docs/adr/0010-injection-detection-is-the-second-line.md)).
+- **Query cache keyed by entitlement, not identity** — 267 ms → 12 ms on a hit (21.7x).
+  Stores chunk *ids*, never content, so every hit is re-authorized through RLS: a forged
+  entry pointing at a restricted chunk still returns nothing
+  ([ADR 0011](docs/adr/0011-cache-by-entitlement-not-identity.md)).
+- **Groundedness verification in two layers** — similarity catches fabrication and
+  negation; an exact numeric check catches what similarity cannot see. Changing an expense
+  limit from 75 to 750 USD scores 0.867 against a faithful 0.884
+  ([ADR 0012](docs/adr/0012-groundedness-needs-two-layers.md)).
 
 ## What Phase 3 delivers
 

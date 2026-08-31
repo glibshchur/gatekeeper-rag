@@ -22,6 +22,7 @@ from uuid import UUID
 
 from gatekeeper.core import audit as audit_log
 from gatekeeper.core.db import admin_session, principal_session
+from gatekeeper.retrieval import cache as query_cache
 from gatekeeper.retrieval.fusion import DEFAULT_RRF_K, reciprocal_rank_fusion
 from gatekeeper.retrieval.lexical import lexical_topk
 from gatekeeper.retrieval.search import (
@@ -29,6 +30,7 @@ from gatekeeper.retrieval.search import (
     RetrievedChunk,
     SearchResult,
     _ann_query,
+    fetch_by_ids,
 )
 
 if TYPE_CHECKING:
@@ -104,6 +106,7 @@ async def retrieve(
     reranker: CrossEncoderReranker | None = None,
     count_withheld: bool = False,
     audit: bool = True,
+    use_cache: bool = False,
 ) -> SearchResult:
     """Run the configured pipeline as `principal`.
 
@@ -116,6 +119,33 @@ async def retrieve(
 
     started = time.monotonic()
     query_vector = embedder.encode_query(query).tolist() if config.dense else None
+
+    # The cache is off by default. It is safe -- a hit is re-authorized by `fetch_by_ids`
+    # -- but a semantic cache can answer a *similar* question rather than the one asked,
+    # and that is a correctness trade a caller should opt into rather than inherit.
+    if use_cache and query_vector is not None:
+        epoch = await query_cache.current_epoch()
+        hit = await query_cache.lookup(principal, query_vector, embedder, epoch)
+        if hit is not None:
+            async with principal_session(principal) as session:
+                chunks = await fetch_by_ids(session, hit.chunk_ids, principal)
+                latency_ms = int((time.monotonic() - started) * 1000)
+                if audit:
+                    await audit_log.append(
+                        session,
+                        principal,
+                        action=f"retrieve:{config.name}:cached",
+                        query_text=query,
+                        retrieved=sorted({UUID(c.document_id) for c in chunks}),
+                        latency_ms=latency_ms,
+                    )
+            return SearchResult(
+                query=query,
+                chunks=chunks,
+                latency_ms=latency_ms,
+                cached=True,
+                cached_query=hit.cached_query,
+            )
 
     unfiltered: list[RetrievedChunk] = []
     if count_withheld and query_vector is not None:
@@ -190,6 +220,16 @@ async def retrieve(
                 denied=denied_docs,
                 latency_ms=latency_ms,
             )
+
+    if use_cache and query_vector is not None:
+        await query_cache.store(
+            principal,
+            query,
+            query_vector,
+            [UUID(c.chunk_id) for c in chunks],
+            embedder,
+            await query_cache.current_epoch(),
+        )
 
     return SearchResult(query=query, chunks=chunks, latency_ms=latency_ms, withheld=withheld)
 

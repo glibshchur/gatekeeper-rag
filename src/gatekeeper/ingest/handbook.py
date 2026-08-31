@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import insert
 from gatekeeper.core.db import admin_session
 from gatekeeper.core.models import Document, Tenant
 from gatekeeper.ingest.acl import AclRuleSet, load_rules
+from gatekeeper.retrieval.cache import bump_epoch
 
 HANDBOOK_REPO = "https://gitlab.com/gitlab-com/content-sites/handbook.git"
 SOURCE = "gitlab-handbook"
@@ -157,4 +158,6 @@ async def load(
             )
             count += 1
 
+    # Document ACLs may have changed, so retire the cache.
+    await bump_epoch("corpus load")
     return count, dict(sorted(tally.items(), key=lambda kv: -kv[1]))
