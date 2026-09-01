@@ -293,6 +293,7 @@ src/gatekeeper/
 | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | Assets, six adversaries, evidence per mitigation, and what is out of scope |
 | [`docs/ABLATION.md`](docs/ABLATION.md) · [`BENCHMARKS.md`](docs/BENCHMARKS.md) · [`LOAD.md`](docs/LOAD.md) | Generated, not hand-written |
 | [`docs/writeups/`](docs/writeups/) | Three long-form pieces on the results that surprised me |
+| [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md) | Running it, and the scripted console captures |
 | [`CHANGELOG.md`](CHANGELOG.md) | Per phase: what was added, measured, and **disproved** |
 
 ## License

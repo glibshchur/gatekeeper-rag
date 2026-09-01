@@ -1,0 +1,12 @@
+{
+  "name": "gatekeeper-rag-tooling",
+  "private": true,
+  "type": "module",
+  "description": "Node tooling that sits beside the Python project. Screenshot capture only — nothing in src/ depends on this, and the application runs without it.",
+  "scripts": {
+    "screenshots": "node scripts/screenshots.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.0.0"
+  }
+}

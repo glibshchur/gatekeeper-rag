@@ -38,8 +38,12 @@ identity would make the log say the CFO read her own compensation data.
 
 `/api/dev-login` is an unauthenticated token mint and is the most dangerous thing in this
 codebase if it ever ships enabled. It is refused outside `dev` mode, `issue_dev_token`
-refuses independently rather than trusting the endpoint's check, and the console banner
-says plainly what it is. The shipped signing secret is also refused unless
+refuses independently rather than trusting the endpoint's check.
+
+*Amended 2026-09-01:* the console carried an on-screen banner saying plainly what dev mode
+means. It was removed because it dominated portfolio screenshots. The disclosure now lives
+here and in the README rather than in the interface, which is a real if small loss: the
+warning was in front of whoever was actually using the thing. The shipped signing secret is also refused unless
 `GK_ALLOW_INSECURE_DEV_AUTH=1` is set — a hardcoded secret reaching production is a
 forge-any-identity bug, so using it has to be deliberate.
 

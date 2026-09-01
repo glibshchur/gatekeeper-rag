@@ -16,7 +16,7 @@ The handle comes from `GK_MCP_PRINCIPAL` (or `--as`) and the server refuses to s
 without a valid, unexpired one.
 
 This is not the compromise the demo console makes. The console impersonates freely and
-says so in a banner, because its purpose is side-by-side comparison. Here, binding to one
+says so, because its purpose is side-by-side comparison. Here, binding to one
 identity is *correct*, not a shortcut: an MCP server over stdio is a subprocess launched
 by one user's client, there is no request envelope to carry a token, and there is no
 second principal it could legitimately serve. Making the binding a launch-time
