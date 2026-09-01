@@ -202,25 +202,69 @@ isolation and retry are real, not aspirational.
 
 ## 4. Claude Code hitting the MCP server
 
-The repo ships a [`.mcp.json`](../.mcp.json), so a client in this directory picks the server
-up. Verify it boots first:
+The repo ships a [`.mcp.json`](../.mcp.json), so a client opened in this directory picks the
+server up. It binds to one principal for the life of the process —
+`GK_MCP_PRINCIPAL`, currently `raj`.
 
-```bash
-make mcp WHO=raj
+Verify it is connected before shooting. If the client reports it disconnected, it is almost
+always because Postgres was down when the client started it: `make up`, then restart the
+client.
+
+**Three prompts, in order. The outputs below are real — captured from a live session
+against the running server, not written from the spec.**
+
+### 4a. Who am I bound to?
+
+> Use the gatekeeper whoami tool.
+
+```
+Raj Mehta — Backend Engineer
+clearance 1, region IN, employment employee
+groups: all-employees, engineering
+need-to-know: pii
+reachable: 4,021 documents; chunks by sensitivity —
+  public 3,865, internal 50,698, confidential 7,923, restricted 0
 ```
 
-Then in Claude Code, in this directory, ask:
+`restricted 0` is the line to have on screen for the next shot.
+
+### 4b. Ask for something the principal cannot fully see
 
 > Search the handbook for the executive compensation review process.
 
-Capture the model reporting **what it found and how many matches it withheld**. That
-behaviour — counts, never titles — is the point of
-[ADR 0009](adr/0009-mcp-surface-and-one-principal-per-process.md).
+```
+Searched as Raj Mehta — Backend Engineer (clearance 1; groups: all-employees, engineering).
+4 additional match(es) exist that this principal is not authorised to read.
+Say so if the answer seems incomplete; do not speculate about their contents.
 
-If the client reports the server as disconnected, it is almost always because Postgres was
-down when the client started it. `make up`, then restart the client.
+<source id="1" path="job-description-library/people-group/total-rewards.md"
+        sensitivity="internal" score="5.122"> …
+<source id="4" path="handbook/finance/…/corporate-finance.md"
+        sensitivity="confidential" score="1.471"> …
+```
 
----
+**This is the shot.** A count of what was withheld, never a title — hand a model the title
+of a withheld document and it writes that title into its answer, and for restricted material
+the title is usually the secret. Capture the assistant's reply saying so honestly rather than
+implying the handbook is silent on the topic
+([ADR 0009](adr/0009-mcp-surface-and-one-principal-per-process.md)).
+
+### 4c. The property that is easy to miss
+
+> Fetch handbook/leadership/compensation-review-conversations.md, then fetch
+> handbook/leadership/this-file-does-not-exist.md.
+
+```
+No document at 'handbook/leadership/compensation-review-conversations.md'
+  is available to this principal.
+No document at 'handbook/leadership/this-file-does-not-exist.md'
+  is available to this principal.
+```
+
+The first path is a real restricted document; the second does not exist. The responses are
+identical. Distinguishing them would turn `get_document` into an oracle for enumerating the
+corpus by probing paths, so it does not. Worth a screenshot because it is the sort of
+guarantee nobody thinks to check.
 
 ## 5. Tracing
 
