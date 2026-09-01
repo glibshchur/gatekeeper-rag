@@ -48,19 +48,48 @@ node scripts/screenshots.mjs    # writes docs/assets/*.png at 2x
 node scripts/screenshots.mjs --open
 ```
 
-Seven frames, ~90 seconds:
+Fifteen frames, about four minutes:
 
 | File | What it shows |
 |---|---|
+| **`00-hero.png`** | **The main image.** One question, four principals, four different amounts of truth |
 | `01-signed-out.png` | The principal picker before sign-in |
-| `02-clearance-is-a-ceiling.png` | **The hero shot.** One question, three principals, three different corpora |
+| `02-clearance-is-a-ceiling.png` | Three principals; the lowest clearance reads the most restricted material |
 | `03-access-surface.png` | Sidebar alone: how much of the corpus each principal can reach |
 | `04-source-detail.png` | A source opened, with its sensitivity tag and real handbook path |
-| `05-withheld-counts.png` | Withheld counts differing across principals on a second question |
+| `05-withheld-counts.png` | Withheld counts differing across principals |
 | `06-dark.png` | Dark theme |
 | `07-mobile.png` | 390px, showing it reflows |
+| `08-four-principals-one-question.png` | The full page the hero is cropped from |
+| `10-expired-grant.png` | A single column: access that expired, and the date it expired on |
+| `11-guest-vs-cfo.png` | Anonymous visitor beside the CFO on the same question |
+| `12-jurisdiction.png` | Per-country employment policy, scoped by region rather than rank |
+| `13-sensitivity-tags.png` | One source list spanning internal, confidential and restricted |
+| `14-tablet.png` | 834px, two columns |
+| `15-mobile-dark.png` | Mobile, dark theme |
 
-### Why `02` is the one to lead with
+### The hero
+
+`00-hero.png` (3008×690, a 4.4:1 banner) is the one to lead with. One question — *"How much
+can I expense for a meal on a business trip?"* — and four outcomes:
+
+| | clearance | withheld | what they get |
+|---|---:|---:|---|
+| Sam Okafor, Security Engineer | 1 | 2 | the actual limits |
+| Unauthenticated Guest | 0 | **8** | "None of the provided sources address meal expense limits" |
+| Mira Lindqvist, CFO | 3 | 1 | the actual limits, in more detail |
+| Wren Adeyemi, External Auditor | 2 | — | **grant expired 2026-08-26 — no claims issued** |
+
+What makes it work is that the guest's non-answer sits directly beneath *"8 results withheld
+by authorization"*. Cause and effect are in the same frame: the assistant is not failing,
+it is being prevented. And Wren shows access is time-bound, not just role-bound.
+
+The equity-refresh question was tried first and rejected — it withholds more, but even the
+CFO's answer comes back "no specific policy described", so three of four columns read as an
+assistant that cannot answer rather than an access model that works. If you re-shoot, check
+the answers are substantive before shipping the frame.
+
+### Why `02` is the strongest supporting shot
 
 Same question — *"How do I report a security incident?"* — asked as three people:
 
@@ -208,8 +237,9 @@ principal ([ADR 0015](adr/0015-traces-carry-shapes-not-contents.md)).
 
 ## 6. Using them
 
-- **README hero:** `02-clearance-is-a-ceiling.png`, full width, directly under the pitch.
-- **Upwork portfolio:** `02`, then the `make redteam` terminal shot. Outcome first, proof second.
+- **README hero / GitHub social preview:** `00-hero.png`, full width, directly under the pitch.
+- **Upwork portfolio main image:** `00-hero.png`. Use `08-four-principals-one-question.png` where a taller, less banner-shaped image fits better.
+- **Second image:** `02-clearance-is-a-ceiling.png`, then the `make redteam` terminal shot. Outcome first, proof second.
 - **Dark-mode viewers:** GitHub honours `<picture>` with `prefers-color-scheme`, so `02` and `06` can be paired.
 
 Keep each file under ~1 MB or GitHub is slow to render them. The 2x captures land between
