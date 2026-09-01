@@ -84,26 +84,60 @@ blind spot (below).
 Migrations and ingestion use a separate, privileged connection that the request path never
 holds.
 
-**Residual risk, and it is larger than the split-privilege story suggests.** The API
-process **holds and routinely uses an RLS-bypassing connection**. Three parts of the
-request path open one, each for a defensible reason:
+**Resolved in migration 0012.** Until then the API process *held and routinely used* an
+RLS-bypassing connection. Three request-path callers opened one — and none of them needed
+owner privilege, only some privilege the app role had been denied:
 
-| Use | Why | What it touches |
+| Use | Then | Now |
 |---|---|---|
-| `count_withheld` baseline | The comparison must be genuinely unfiltered, or the denied-row count silently under-reports every denial the policy caused | Chunk ids and embeddings of rows the caller *cannot* read |
-| Query cache | Entitlement fingerprints and chunk ids; the cache is not a tenant-scoped relation | No content |
-| `/api/jobs` | Operator plane, gated on `gatekeeper.admin` | Job rows, including document paths |
+| **Resolving the caller** | `load_principal()` read `principals` over an owner connection — on every single request | `gatekeeper.resolve_principal()`, exact-match on one handle, returns at most one row |
+| `count_withheld` baseline | Ran the unfiltered ranking over an owner connection and returned whole chunks | `gatekeeper.withheld_summary()`, returns a count and the denied document ids — never content, never chunk ids |
+| Query cache | Owner connection, because 0010 revoked all app-role access | App role holds SELECT/INSERT/UPDATE. No DELETE |
+| `/api/jobs` | Owner connection | App role holds SELECT. Writes stay in the worker |
 
-Chunk **content** is never read through it. But an attacker with code execution in the API
-process inherits that credential and can then read the entire corpus directly — RLS does
-not bound them at all. It bounds a *logic* bug in the request path, not a code-execution
-compromise of the process holding the owner URL.
+The first row is the one that matters most and the one that was hardest to see. Resolving
+a principal is a genuine chicken-and-egg: the `principals_read` policy reads the claims
+GUC, and resolution is what *produces* the claims, so no policy can match at that moment.
+Something has to run outside the policy. `resolve_principal()` is that something, scoped
+to an exact tenant slug and handle with no pattern matching — it discloses what
+authenticating as that handle already discloses, and cannot enumerate the directory.
 
-The honest hardening is to move the owner credential out of the API process entirely: run
-the withheld-count baseline as a `SECURITY DEFINER` function that returns only a count,
-give the cache its own least-privilege role, and move `/api/jobs` behind the worker. **This
-is not done.** It is the largest known gap between what the split-privilege design claims
-and what it currently delivers.
+It was found by pointing `GK_DATABASE_OWNER_URL` at a dead host and watching the API
+return 500, after two passes of reading the code had missed it.
+
+The withheld count is the interesting one, because it genuinely must see denied rows —
+an authorized baseline would filter out exactly what it is counting, reporting 0 withheld
+while withholding plenty. What it does not need is for the *caller* to see them. Moving it
+into a `SECURITY DEFINER` function turns a credential sitting in an environment variable
+into a function with a fixed, narrow output. There is no longer anything in the API
+process's environment worth stealing.
+
+`GK_DATABASE_OWNER_URL` is now unused by the API. `admin_session()` remains for
+migrations, ingestion, the worker, the CLI and the offline harnesses — none of which serve
+requests.
+
+**The residual risk, stated rather than glossed.** Granting the app role SELECT on
+`query_cache` widened the data plane: a SQL-injection bug in the request path could now
+read `query_cache.query_text`, which is what *other* entitlement buckets searched for.
+That is a real disclosure and it is a deliberate trade — it is strictly smaller than what
+the same attacker got before, when the process held a credential that could read every
+row of every table. Chunk ids in the cache disclose nothing on their own; fetching their
+content still goes through RLS.
+
+**The definer functions have a minimal owner.** A `SECURITY DEFINER` function runs as its
+*owner*, and migrations create objects owned by the superuser that runs them — so after
+the first pass these two functions had narrow bodies and superuser authority behind them,
+which is half a fix. They are now owned by `gatekeeper_definer`: `NOLOGIN`, not a
+superuser, `BYPASSRLS` (required, because `principals` and `chunks` are `FORCE`d), holding
+`SELECT` on exactly three tables and no write privilege anywhere. Both bodies are static
+SQL with bound parameters and a pinned `search_path`, so neither can be steered into
+running something else.
+
+**What is still not bounded.** An attacker with code execution in the API process can
+issue queries **as whichever principal it is currently serving**, and can call
+`withheld_summary` for that principal's tenant. RLS bounds them to one principal's
+entitlements at a time instead of to nothing at all — a large improvement, not a
+guarantee. Process isolation, not row-level security, is the control for that.
 
 ### A4 — Token forger
 
@@ -184,7 +218,7 @@ Stated so their absence is not mistaken for coverage:
 |---|---|---|
 | A1 curious insider | **Mitigated** | 0 leaks / 360 probes; 0 disagreements / 442,782 pairs |
 | A2 content author | **Contained** | 0 of 13 reaching payloads widened access, including 2 undetected |
-| A3 compromised process | **Weak** — the API process holds an RLS-bypassing credential | Split-privilege roles exist; the request path still opens owner connections |
+| A3 compromised process | **Bounded** — no owner credential in the API process | Owner URL pointed at a dead host in tests; the full request path still works (`test_owner_credential_boundary.py`) |
 | A4 token forger | **Mitigated for forgery, open for revocation** | No entitlement claims exist to forge; no revocation list |
 | A5 telemetry operator | **Mitigated for traces, open for the audit log** | AST test over every span; `audit_log.query_text` is by design |
 | A6 other tenant | **Mitigated** | Policy clause + explicit predicate + oracle reconciliation |

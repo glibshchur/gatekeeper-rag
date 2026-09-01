@@ -13,9 +13,10 @@ from dataclasses import dataclass
 
 import pytest
 from sqlalchemy import delete, func, select
+from sqlalchemy import insert as sa_insert
 
 from gatekeeper.core.db import admin_session, principal_session
-from gatekeeper.core.models import Chunk, Document, QueryCacheEntry, Tenant
+from gatekeeper.core.models import CacheEpoch, Chunk, Document, QueryCacheEntry, Tenant
 from gatekeeper.core.principal import Clearance, Principal
 from gatekeeper.llm.embeddings import Embedder, LocalOnnxEmbedder
 from gatekeeper.retrieval import cache
@@ -252,18 +253,44 @@ async def test_the_cache_stores_ids_and_never_content(fx: Fx, embedder: Embedder
     assert "content" not in columns and "chunks" not in columns
 
 
-async def test_the_app_role_cannot_read_the_cache() -> None:
-    """The cache is admin-plane only. It holds no tenant data, and giving the query plane
-    access to it would create a path to chunk ids that never passes through a policy."""
-    async with principal_session(
-        Principal(
-            id=uuid.uuid4(),
-            tenant_id=uuid.uuid4(),
-            external_id="probe",
-            email="p@test.invalid",
-            groups=[],
-            clearance=Clearance.EXTERNAL,
-        )
-    ) as session:
+async def test_the_app_role_can_use_the_cache_but_not_retire_it() -> None:
+    """The boundary migration 0012 moved, and why.
+
+    0010 revoked *all* cache access from the app role, reasoning that the cache is
+    admin-plane. The effect was the opposite of the intent: rather than keeping the data
+    plane away from the cache, it forced the request path onto the **owner** connection,
+    which bypasses row-level security on every table. Trading "the query plane can read a
+    table of chunk ids" for "the API process holds a credential that can read the entire
+    corpus" was a bad trade, and it is the one that was in place.
+
+    So the app role now gets exactly what the hot path performs — lookup, store, and the
+    hit counter — and nothing that changes what anyone can see. Purging retired epochs
+    (DELETE) and bumping the epoch (INSERT on `cache_epochs`) retire cache entries
+    system-wide and stay owner-only.
+
+    The residual widening is real and recorded: a data-plane SQL injection could now read
+    `query_cache.query_text`, which is what other entitlement buckets searched for. That
+    is strictly smaller than what the previous arrangement exposed to the same attacker,
+    and it is in `docs/THREAT_MODEL.md` A3 rather than glossed over.
+    """
+    probe = Principal(
+        id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        external_id="probe",
+        email="p@test.invalid",
+        groups=[],
+        clearance=Clearance.EXTERNAL,
+    )
+    async with principal_session(probe) as session:
+        # Permitted: the hot path.
+        await session.execute(select(func.count(QueryCacheEntry.id)))
+
+    async with principal_session(probe) as session:
+        # Refused: purging is maintenance, not a request.
         with pytest.raises(Exception, match="permission denied"):
-            await session.execute(select(func.count(QueryCacheEntry.id)))
+            await session.execute(delete(QueryCacheEntry))
+
+    async with principal_session(probe) as session:
+        # Refused: bumping the epoch retires every entry for every principal.
+        with pytest.raises(Exception, match="permission denied"):
+            await session.execute(sa_insert(CacheEpoch).values(epoch=999_999, reason="probe"))

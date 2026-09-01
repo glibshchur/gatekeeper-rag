@@ -26,6 +26,8 @@ from gatekeeper.core.models import Chunk, Document
 from gatekeeper.redteam.injection import FLAG_THRESHOLD
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from gatekeeper.core.principal import Principal
@@ -273,7 +275,15 @@ async def unfiltered_candidates(
 
     `principal` is used for its tenant and nothing else: passing it to `_ann_query` would
     apply `coarse_predicate` and quietly re-introduce half the policy into the baseline
-    this function exists to be free of."""
+    this function exists to be free of.
+
+    **Harness only.** This is the one caller in this module that still opens an
+    `admin_session`, and it returns full chunks rather than a count — which is why it must
+    never be reachable from the request path. Its only caller is `redteam.runner`, run
+    offline from the CLI as `make redteam`. The request path's equivalent is
+    :func:`withheld_summary`, which returns a count from a `SECURITY DEFINER` function
+    instead of rows over an owner connection. See `docs/THREAT_MODEL.md` A3.
+    """
     vector = embedder.encode_query(query).tolist()
     async with admin_session() as session:
         return await _ann_query(
@@ -334,6 +344,54 @@ async def search(
         return result
 
 
+async def withheld_summary(
+    session: AsyncSession,
+    *,
+    embedder: Embedder,
+    query_vector: list[float],
+    k: int,
+    ef_search: int,
+    tenant_id: UUID,
+    visible_chunk_ids: Sequence[str],
+) -> tuple[int, list[UUID]]:
+    """How many of the unfiltered top-k the policy removed, and which documents they were.
+
+    The comparison has to see denied rows — that is the whole point of a withheld count,
+    and an authorized baseline would filter out exactly what it is trying to count. But
+    the *caller* does not have to see them. `gatekeeper.withheld_summary()` is
+    `SECURITY DEFINER`: it runs the unfiltered ranking owner-side and returns a count plus
+    the denied document ids, never chunk content and never chunk ids.
+
+    That is the difference between a privilege and a credential. Before migration 0012 the
+    API process held the owner connection string in its environment, so anything running
+    in that process could read the entire corpus directly. Now the privilege is a function
+    with a fixed, narrow output, and there is nothing in the environment to steal.
+
+    Scoped to the principal's own tenant. Comparing against the whole database would count
+    other tenants' chunks as withheld, turning a transparency feature into a side channel
+    that discloses other corpora exist.
+    """
+    row = (
+        await session.execute(
+            text(
+                "SELECT withheld, denied_documents FROM gatekeeper.withheld_summary("
+                ":tenant, :query, :model, :dim, :k, :ef, :visible)"
+            ),
+            {
+                "tenant": tenant_id,
+                # pgvector accepts its own text form; the function casts it to halfvec.
+                "query": "[" + ",".join(repr(float(v)) for v in query_vector) + "]",
+                "model": embedder.space.model,
+                "dim": embedder.space.dim,
+                "k": k,
+                "ef": ef_search,
+                "visible": [UUID(c) for c in visible_chunk_ids],
+            },
+        )
+    ).one()
+    return int(row.withheld), sorted(row.denied_documents or [])
+
+
 async def _search(
     principal: Principal,
     query: str,
@@ -347,26 +405,6 @@ async def _search(
     started = time.monotonic()
     with telemetry.span("embed.query", **{"embedding.model": embedder.space.model}):
         query_vector = embedder.encode_query(query).tolist()
-
-    # Computed before the principal transaction so the denied ids can be written into
-    # the audit entry from inside it. Scoped to the principal's own tenant: comparing
-    # against the whole database would count other tenants' chunks as "withheld", which
-    # turns a transparency feature into a side channel disclosing other corpora exist.
-    unfiltered: list[RetrievedChunk] = []
-    if count_withheld:
-        # Its own span because it is not free: the first trace showed this unfiltered
-        # baseline costing more than the authorized query it is compared against, which
-        # is worth knowing before enabling `count_withheld` on a hot path.
-        with telemetry.span("search.withheld_baseline"):
-            async with admin_session() as session:
-                unfiltered = await _ann_query(
-                    session,
-                    embedder=embedder,
-                    query_vector=query_vector,
-                    k=k,
-                    ef_search=ef_search,
-                    tenant_id=principal.tenant_id,
-                )
 
     async with principal_session(principal) as session:
         with telemetry.span("search.dense", **{"search.ef_search": ef_search}):
@@ -383,10 +421,19 @@ async def _search(
         withheld: int | None = None
         denied_docs: list[UUID] = []
         if count_withheld:
-            visible = {c.chunk_id for c in chunks}
-            blocked = [c for c in unfiltered if c.chunk_id not in visible]
-            withheld = len(blocked)
-            denied_docs = sorted({UUID(c.document_id) for c in blocked})
+            # Its own span because it is not free: the first trace showed this baseline
+            # costing more than the authorized query it is compared against, which is
+            # worth knowing before enabling `count_withheld` on a hot path.
+            with telemetry.span("search.withheld_baseline"):
+                withheld, denied_docs = await withheld_summary(
+                    session,
+                    embedder=embedder,
+                    query_vector=query_vector,
+                    k=k,
+                    ef_search=ef_search,
+                    tenant_id=principal.tenant_id,
+                    visible_chunk_ids=[c.chunk_id for c in chunks],
+                )
 
         latency_ms = int((time.monotonic() - started) * 1000)
 

@@ -97,21 +97,42 @@ async def principal_session(
 
 
 @asynccontextmanager
+async def unprincipaled_session() -> AsyncIterator[AsyncSession]:
+    """A data-plane transaction with no principal, for relations that carry no tenant data.
+
+    Connects as `gatekeeper_app`, so it is `NOSUPERUSER` / `NOBYPASSRLS` like every other
+    request-path connection — it simply installs no claims, because the tables it touches
+    (`query_cache`, `cache_epochs`, `ingest_jobs`) are not tenant-scoped and have no
+    policy to satisfy. Reaching for a tenant table here returns nothing: with no GUC set,
+    the RLS predicate denies every row, which is the correct failure direction.
+
+    This exists so that "needs no principal" stops implying "needs the owner". It was the
+    conflation of those two that put an RLS-bypassing credential in the API process; see
+    `docs/THREAT_MODEL.md` A3 and migration 0012.
+    """
+    session_factory = async_sessionmaker(app_engine(), expire_on_commit=False)
+    async with session_factory() as session, session.begin():
+        yield session
+
+
+@asynccontextmanager
 async def admin_session() -> AsyncIterator[AsyncSession]:
     """Open an unfiltered transaction as the table owner. Bypasses row-level security.
 
-    Not only ingestion and migrations, despite what an earlier version of this docstring
-    claimed. Three parts of the *request* path use it, and each is a deliberate choice
-    worth knowing about:
+    **Not reachable from the request path.** Migrations, ingestion, the worker, the CLI
+    and the eval/red-team harnesses only. The API process does not open one, and does not
+    need `GK_DATABASE_OWNER_URL` in its environment at all.
 
-    * the `count_withheld` baseline, which must be genuinely unfiltered or the count of
-      denied rows silently under-reports every denial the policy caused;
-    * the query cache, which holds chunk ids and entitlement hashes but no content;
-    * `/api/jobs`, gated on the `gatekeeper.admin` claim.
+    That was not always true. Three request-path callers used to open one — the withheld
+    count, the query cache, and `/api/jobs` — none of which needed owner privilege, only
+    *some* privilege the app role had been denied. Migration 0012 gave the app role
+    exactly what each needed and moved the withheld count into a `SECURITY DEFINER`
+    function, so the privilege lives in the database rather than in an environment
+    variable a compromised process can read.
 
-    Chunk *content* is never read through this connection. But the API process does hold
-    an RLS-bypassing credential, which bounds what a compromise of that process costs —
-    see `docs/THREAT_MODEL.md`, adversary A3.
+    If you are adding a caller here, the question to answer is not "does this need to
+    ignore the policy" but "does this need to run outside a request". If it runs inside
+    one, it belongs on `principal_session` or `unprincipaled_session`.
     """
     session_factory = async_sessionmaker(owner_engine(), expire_on_commit=False)
     async with session_factory() as session, session.begin():

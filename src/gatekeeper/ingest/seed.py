@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 
-from gatekeeper.core.db import admin_session
+from gatekeeper.core.db import admin_session, unprincipaled_session
 from gatekeeper.core.models import Policy, PrincipalRow, Tenant
 from gatekeeper.core.principal import Clearance, Principal
 
@@ -176,16 +176,25 @@ async def seed_tenant_and_principals() -> tuple[int, int]:
 
 
 async def load_principal(external_id: str, tenant_slug: str = TENANT_SLUG) -> Principal:
-    """Fetch a principal by handle. Runs on the admin plane: resolving *who you are* is
-    an authentication concern and necessarily precedes authorization."""
-    async with admin_session() as session:
+    """Fetch a principal by handle. Resolving *who you are* necessarily precedes
+    authorization, so this cannot run under the policy it is about to establish.
+
+    It runs on the **app role** all the same. `gatekeeper.resolve_principal()` is a
+    `SECURITY DEFINER` function taking an exact tenant slug and handle and returning at
+    most one row: it cannot list, pattern-match or enumerate, so it discloses exactly what
+    authenticating as that handle already discloses.
+
+    This used to open an `admin_session()`, which put an RLS-bypassing credential in the
+    API process — on the single hottest path there is, since `auth.resolve()` calls this
+    on every request. See `docs/THREAT_MODEL.md` A3 and migration 0013.
+    """
+    async with unprincipaled_session() as session:
         row = (
             await session.execute(
-                select(PrincipalRow)
-                .join(Tenant, Tenant.id == PrincipalRow.tenant_id)
-                .where(Tenant.slug == tenant_slug, PrincipalRow.external_id == external_id)
+                text("SELECT * FROM gatekeeper.resolve_principal(:tenant_slug, :external_id)"),
+                {"tenant_slug": tenant_slug, "external_id": external_id},
             )
-        ).scalar_one_or_none()
+        ).one_or_none()
         if row is None:
             raise LookupError(f"no principal {external_id!r} in tenant {tenant_slug!r}")
         return Principal(

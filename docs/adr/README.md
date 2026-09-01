@@ -26,3 +26,4 @@ useful than the reasoning that turned out to be right.
 | [0014](0014-jobs-are-rows-not-just-messages.md) | Ingestion jobs are rows; the queue only carries the id | Accepted |
 | [0015](0015-traces-carry-shapes-not-contents.md) | Traces carry shapes, never contents | Accepted |
 | [0016](0016-the-bottleneck-is-the-embedder.md) | Under load the bottleneck is the embedder, not the authorization | Accepted |
+| [0017](0017-no-owner-credential-in-the-request-path.md) | No RLS-bypassing credential in the request path | Accepted |

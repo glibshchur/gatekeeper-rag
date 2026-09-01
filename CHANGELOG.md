@@ -16,9 +16,15 @@ marketing document.
 - Contextual retrieval (Phase 3). Costed at roughly $37 via the Anthropic Batch API; not run.
 - Agentic multi-hop planner with budgets (Phase 4). Each hop would be a fresh authorized query, so the model extends — untested, therefore unclaimed.
 
+### Security
+- **No RLS-bypassing credential in the request path.** `admin_session()` was documented "ingestion and migrations only" and had four request-path callers — including `load_principal`, which runs on every request. The API process therefore held `GK_DATABASE_OWNER_URL` and used it. Each privilege is now a `SECURITY DEFINER` function with a narrow return type, or a scoped grant to the app role ([ADR 0017](docs/adr/0017-no-owner-credential-in-the-request-path.md), migrations 0012–0014).
+- The definer functions are owned by `gatekeeper_definer` — `NOLOGIN`, non-superuser, `BYPASSRLS`, `SELECT` on three tables — rather than by the superuser that ran the migration.
+- Verified by pointing `database_owner_url` at a host that does not exist and exercising the request path, with a guard test asserting that fixture actually breaks `admin_session`. Reading the code had missed the `load_principal` caller twice.
+
 ### Known gaps
 - No token revocation. A token is valid until it expires.
-- The API process holds an RLS-bypassing connection for the withheld-count baseline, the query cache, and `/api/jobs`. See [THREAT_MODEL.md](docs/THREAT_MODEL.md) A3.
+- A SQL-injection bug in the request path could read `query_cache.query_text` — a deliberate trade for removing the owner credential. See [THREAT_MODEL.md](docs/THREAT_MODEL.md) A3.
+- Code execution in the API process is still bounded only to the principal being served, not to nothing.
 - No rate limiting or query cost budget.
 - MinIO blob storage is not RLS-governed. Nothing in the read path consults it.
 

@@ -338,10 +338,12 @@ async def jobs(
 
     from sqlalchemy import select
 
-    from gatekeeper.core.db import admin_session
+    from gatekeeper.core.db import unprincipaled_session
     from gatekeeper.core.models import IngestJob
 
-    async with admin_session() as session:
+    # Read-only, on the app role. `ingest_jobs` carries no tenant data and has no policy;
+    # writing and enqueuing stay owner-side in the worker.
+    async with unprincipaled_session() as session:
         rows = list(
             (
                 await session.execute(

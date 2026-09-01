@@ -8,6 +8,14 @@ looks like a performance win, and it survives every test that only checks latenc
 
 Three decisions make this safe, and the second is the one worth stealing.
 
+**0. The cache runs on the app role, not the owner.** It used to run on the owner
+connection, because migration 0010 revoked all app-role access on the reasoning that the
+cache is admin-plane. That reasoning inverted in practice: rather than keeping the query
+plane away from the cache, it dragged an RLS-bypassing credential into the request path.
+0012 grants the app role exactly the hot path — SELECT, INSERT, UPDATE — and leaves DELETE
+and epoch bumps owner-only, because those retire entries for everyone. See
+`docs/THREAT_MODEL.md` A3.
+
 **1. Cache the decision, not the data.** An entry stores chunk *ids*, never chunk content.
 A hit re-fetches those ids through `principal_session`, so the row-level security policy
 runs again on every hit. Even if the key were wrong, a hit could not return a row the
@@ -51,7 +59,7 @@ from uuid import UUID
 
 from sqlalchemy import delete, func, select, update
 
-from gatekeeper.core.db import admin_session
+from gatekeeper.core.db import admin_session, unprincipaled_session
 from gatekeeper.core.models import CacheEpoch, QueryCacheEntry
 
 if TYPE_CHECKING:
@@ -89,7 +97,7 @@ def entitlement_fingerprint(principal: Principal, epoch: int) -> str:
 
 
 async def current_epoch() -> int:
-    async with admin_session() as session:
+    async with unprincipaled_session() as session:
         value = (await session.execute(select(func.max(CacheEpoch.epoch)))).scalar_one_or_none()
     return int(value or 0)
 
@@ -118,7 +126,7 @@ async def lookup(
     column = QueryCacheEntry.embedding_384
     distance = column.cosine_distance(query_vector)
 
-    async with admin_session() as session:
+    async with unprincipaled_session() as session:
         row = (
             await session.execute(
                 select(
@@ -160,7 +168,7 @@ async def store(
     epoch: int,
 ) -> None:
     fingerprint = entitlement_fingerprint(principal, epoch)
-    async with admin_session() as session:
+    async with unprincipaled_session() as session:
         entry = QueryCacheEntry(
             fingerprint=fingerprint,
             epoch=epoch,

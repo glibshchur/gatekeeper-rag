@@ -42,7 +42,7 @@ The restricted row never leaves Postgres. More: [request path](docs/diagrams/req
 |---|---|
 | Leaks across 360 adversarial probes + 6 direct-fetch + 8 boundary probes | **0** |
 | (principal, chunk) pairs where the database and an independent oracle disagree | **0 of 442,782** |
-| Over-block rate (entitled results withheld) | **1.15%** |
+| Over-block rate (entitled results withheld) | **0–1.15%** (0–1 of 87) |
 | nDCG@10 on 58 hand-written questions (`dense+rerank`) | **0.793** ±0.003 |
 | Retrieval latency p50, dense / dense+rerank | **8 ms / 205 ms** |
 | Recall@10 vs exact brute force, `ef_search=200` | **1.000** |
@@ -94,6 +94,13 @@ And two bugs found by testing rather than reading:
   because `index_one` returned the same value for "unchanged" and "the file is gone". Found
   by hiding a source file and watching the job pass
   ([ADR 0014](docs/adr/0014-jobs-are-rows-not-just-messages.md)).
+
+- **The threat model found a hole in the project's central claim.** `admin_session()` was
+  documented "ingestion and migrations only" and had four request-path callers, so the API
+  process held a credential that bypasses row-level security — including on principal
+  resolution, the hottest path there is. Fixed: the privileges are `SECURITY DEFINER`
+  functions now, and a test points the owner URL at a dead host to prove nothing reaches
+  for it ([ADR 0017](docs/adr/0017-no-owner-credential-in-the-request-path.md)).
 
 Three of these are written up at length in [`docs/writeups/`](docs/writeups/).
 

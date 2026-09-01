@@ -22,7 +22,7 @@ from uuid import UUID
 
 from gatekeeper.core import audit as audit_log
 from gatekeeper.core import telemetry
-from gatekeeper.core.db import admin_session, principal_session
+from gatekeeper.core.db import principal_session
 from gatekeeper.retrieval import cache as query_cache
 from gatekeeper.retrieval.fusion import DEFAULT_RRF_K, reciprocal_rank_fusion
 from gatekeeper.retrieval.lexical import lexical_topk
@@ -32,6 +32,7 @@ from gatekeeper.retrieval.search import (
     SearchResult,
     _ann_query,
     fetch_by_ids,
+    withheld_summary,
 )
 
 if TYPE_CHECKING:
@@ -208,24 +209,6 @@ async def _retrieve(
                 cached_query=hit.cached_query,
             )
 
-    unfiltered: list[RetrievedChunk] = []
-    if count_withheld and query_vector is not None:
-        async with admin_session() as session:
-            # Deliberately NOT passed `principal`: this is the baseline the
-            # withheld count is measured against, so it must stay genuinely
-            # unfiltered. Applying `coarse_predicate` here would remove exactly the
-            # rows the policy is about to deny, and the count would silently under-
-            # report every denial caused by group or clearance — reporting 0 withheld
-            # while withholding plenty, which is worse than not reporting at all.
-            unfiltered = await _ann_query(
-                session,
-                embedder=embedder,
-                query_vector=query_vector,
-                k=k,
-                ef_search=config.ef_search,
-                tenant_id=principal.tenant_id,
-            )
-
     async with principal_session(principal) as session:
         rankings: list[list[RetrievedChunk]] = []
         if query_vector is not None:
@@ -267,11 +250,21 @@ async def _retrieve(
 
         withheld: int | None = None
         denied_docs: list[UUID] = []
-        if count_withheld and unfiltered:
-            visible = {c.chunk_id for c in chunks}
-            blocked = [c for c in unfiltered if c.chunk_id not in visible]
-            withheld = len(blocked)
-            denied_docs = sorted({UUID(c.document_id) for c in blocked})
+        if count_withheld and query_vector is not None:
+            # The baseline must see denied rows; this caller must not. It runs owner-side
+            # in a SECURITY DEFINER function that returns a count and the denied document
+            # ids -- never content, never chunk ids -- so the request path needs no
+            # RLS-bypassing credential. See docs/THREAT_MODEL.md A3 and migration 0012.
+            with telemetry.span("search.withheld_baseline"):
+                withheld, denied_docs = await withheld_summary(
+                    session,
+                    embedder=embedder,
+                    query_vector=query_vector,
+                    k=k,
+                    ef_search=config.ef_search,
+                    tenant_id=principal.tenant_id,
+                    visible_chunk_ids=[c.chunk_id for c in chunks],
+                )
 
         latency_ms = int((time.monotonic() - started) * 1000)
 
