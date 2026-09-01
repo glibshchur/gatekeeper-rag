@@ -6,118 +6,209 @@
 <title>gatekeeper-rag console</title>
 <style>
   :root {
+    /* Type scale. One step per role, no half-pixel sizes, rem so it honours the
+       reader's browser setting. Sizes below --fs-md are for labels and metadata only. */
+    --fs-2xs: 0.6875rem;  /* 11px — tags, file paths */
+    --fs-xs:  0.75rem;    /* 12px — metadata, captions */
+    --fs-sm:  0.8125rem;  /* 13px — dense secondary UI */
+    --fs-md:  0.875rem;   /* 14px — source excerpts */
+    --fs-base:0.9375rem;  /* 15px — body */
+    --fs-lg:  1rem;       /* 16px — inputs, answers, section headings */
+    --fs-xl:  1.125rem;   /* 18px — page title */
+
+    /* Radii are concentric: an inner radius plus its parent's padding. */
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 12px;   /* --radius-sm + 6px of .who padding */
+
     --bg: #fbfbfa; --panel: #ffffff; --border: #e4e2dd; --text: #1a1917;
     --muted: #6f6b64; --accent: #2f6f4f; --accent-soft: #e8f1ec;
-    --public: #2f6f4f; --internal: #35618e; --confidential: #97621b; --restricted: #a63232;
+    /* Sensitivity hues double as the tag label colour and, at 14-16%% opacity, its own
+       background tint, which squeezes the contrast between them. Measured on the composited
+       pair, not against the page: --confidential at #97621b scored 4.16:1 on its #eee6db
+       tint and missed AA. Corrected by lightness only, so the hue is unchanged. */
+    --public: #2f6f4f; --internal: #35618e; --confidential: #8a5916; --restricted: #a63232;
     --withheld-bg: #fdeeee; --withheld-fg: #a63232; --code: #f4f3f0;
-    --radius: 10px;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #17171a; --panel: #1e1e22; --border: #33333a; --text: #e9e8e4;
       --muted: #9a978f; --accent: #6fbf95; --accent-soft: #1f2f27;
-      --public: #6fbf95; --internal: #79aede; --confidential: #d9a441; --restricted: #e57373;
+      /* Dark: --restricted at #e57373 scored 4.40:1 on its own tint. Lightened to clear AA. */
+      --public: #6fbf95; --internal: #79aede; --confidential: #d9a441; --restricted: #ea8080;
       --withheld-bg: #2c1d1d; --withheld-fg: #e57373; --code: #26262b;
     }
   }
   * { box-sizing: border-box; }
+  html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font: var(--fs-base)/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
-  header {
-    padding: 18px 24px 14px; border-bottom: 1px solid var(--border); background: var(--panel);
+
+  /* Visible to screen readers, not to the eye. Used where the visual design already
+     communicates a grouping that the accessibility tree would otherwise miss. */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
-  h1 { margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+
+  header { padding: 18px 24px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  h1 { margin: 0; font-size: var(--fs-xl); letter-spacing: -0.01em; text-wrap: balance; }
   h1 span { color: var(--muted); font-weight: 400; }
   .warn {
-    margin-top: 10px; padding: 8px 12px; border-radius: 8px;
+    margin-top: 10px; padding: 8px 12px; border-radius: var(--radius-sm);
     background: var(--withheld-bg); color: var(--withheld-fg);
-    font-size: 12.5px; border: 1px solid color-mix(in srgb, var(--withheld-fg) 25%, transparent);
+    font-size: var(--fs-xs); max-width: 78ch; text-wrap: pretty;
+    border: 1px solid color-mix(in srgb, var(--withheld-fg) 25%, transparent);
   }
-  main { display: grid; grid-template-columns: 290px 1fr; gap: 22px; padding: 22px 24px 60px; align-items: start; }
+
+  main {
+    display: grid; grid-template-columns: 290px 1fr; gap: 22px;
+    padding: 22px clamp(14px, 4vw, 24px) 60px; align-items: start;
+  }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
 
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); }
   .panel > h2 {
-    margin: 0; padding: 11px 14px; font-size: 12px; text-transform: uppercase;
-    letter-spacing: 0.07em; color: var(--muted); border-bottom: 1px solid var(--border);
+    margin: 0; padding: 12px 14px; font-size: var(--fs-lg); font-weight: 650;
+    letter-spacing: -0.005em; border-bottom: 1px solid var(--border);
   }
-  .who { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .who { padding: 6px; display: flex; flex-direction: column; gap: 4px; }
   .who label {
-    display: block; padding: 9px 11px; border-radius: 8px; cursor: pointer;
+    display: block; padding: 9px 11px; border-radius: var(--radius-sm); cursor: pointer;
     border: 1px solid transparent;
+    transition: background-color 120ms ease-out, border-color 120ms ease-out;
   }
-  .who label:hover { background: var(--code); }
+  @media (hover: hover) { .who label:hover { background: var(--code); } }
   .who label:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); }
-  .who input { margin-right: 8px; accent-color: var(--accent); }
-  .who .nm { font-weight: 600; font-size: 13.5px; }
-  .who .meta { color: var(--muted); font-size: 11.5px; margin: 3px 0 0 22px; }
-  .who .bar { margin: 6px 0 0 22px; height: 4px; border-radius: 3px; background: var(--code); overflow: hidden; }
-  .who .bar i { display: block; height: 100%; background: var(--accent); }
-
-  form { display: flex; gap: 8px; margin-bottom: 16px; }
-  input[type=text] {
-    flex: 1; padding: 11px 13px; border-radius: var(--radius);
-    border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 14.5px;
+  .who input { margin-inline-end: 8px; accent-color: var(--accent); }
+  .who .nm { font-weight: 600; font-size: var(--fs-sm); }
+  .who .meta { color: var(--muted); font-size: var(--fs-xs); margin: 3px 0 0; padding-inline-start: 22px; }
+  .who .bar {
+    margin: 6px 0 0; margin-inline-start: 22px; height: 4px;
+    border-radius: 3px; background: var(--code); overflow: hidden;
   }
-  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .who .bar i { display: block; height: 100%; background: var(--accent); }
+  .session { color: var(--muted); font-size: var(--fs-xs); padding: 0 14px 12px; }
+  .session .linkish {
+    background: none; border: 0; padding: 0; font: inherit; color: var(--accent);
+    text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+  }
+
+  .ask { margin-bottom: 16px; }
+  .ask > label { display: block; font-size: var(--fs-xs); color: var(--muted); margin-bottom: 6px; }
+  .ask .row { display: flex; gap: 8px; }
+  input[type=text] {
+    flex: 1; padding: 11px 13px; border-radius: var(--radius-md);
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    /* 16px: iOS Safari zooms the page for anything smaller. */
+    font-size: var(--fs-lg);
+  }
+  input[type=text]:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
   button {
-    padding: 11px 18px; border-radius: var(--radius); border: 1px solid var(--accent);
-    background: var(--accent); color: #fff; font-weight: 600; font-size: 14px; cursor: pointer;
+    padding: 11px 18px; border-radius: var(--radius-md); border: 1px solid var(--accent);
+    background: var(--accent); color: #fff; font-weight: 600; font-size: var(--fs-md);
+    cursor: pointer; transition: opacity 120ms ease-out;
   }
   button:disabled { opacity: .55; cursor: progress; }
-  .examples { display: flex; flex-wrap: wrap; gap: 6px; margin: -8px 0 16px; }
+  @media (prefers-reduced-motion: no-preference) {
+    button { transition: opacity 120ms ease-out, scale 120ms ease-out; }
+    button:not(:disabled):active { scale: 0.96; }
+  }
+  .examples { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
   .examples button {
     background: transparent; color: var(--muted); border: 1px solid var(--border);
-    font-weight: 400; font-size: 12px; padding: 4px 10px; border-radius: 20px;
+    font-weight: 400; font-size: var(--fs-xs); padding: 5px 11px; border-radius: 20px;
+    transition: color 120ms ease-out, border-color 120ms ease-out;
   }
-  .examples button:hover { color: var(--text); border-color: var(--accent); }
+  @media (hover: hover) {
+    .examples button:hover { color: var(--text); border-color: var(--accent); }
+  }
 
-  .cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); align-items: start; }
-  .col > h3 { margin: 0 0 2px; font-size: 14.5px; }
-  .col .sub { color: var(--muted); font-size: 11.5px; margin-bottom: 9px; }
+  /* min(), so a 330px minimum never forces the page wider than the viewport at 320px. */
+  .cols {
+    display: grid; gap: 16px; align-items: start;
+    grid-template-columns: repeat(auto-fit, minmax(min(330px, 100%), 1fr));
+  }
+  /* Grid and flex children default to min-width:auto, so a single long token in a source
+     excerpt sets the track's minimum and drags the whole page wider than the viewport.
+     Measured at 320px: one .body had a min-content of 418px. */
+  .col, ol.src li { min-width: 0; }
+  .col > h3 { margin: 0 0 2px; font-size: var(--fs-base); font-weight: 600; text-wrap: balance; }
+  .col .sub {
+    color: var(--muted); font-size: var(--fs-xs); margin-bottom: 9px;
+    font-variant-numeric: tabular-nums; text-wrap: pretty;
+  }
   .withheld {
-    display: inline-block; padding: 3px 9px; border-radius: 20px; font-size: 12px; font-weight: 600;
+    display: inline-block; padding: 3px 9px; border-radius: 20px;
+    font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums;
     background: var(--withheld-bg); color: var(--withheld-fg); margin-bottom: 10px;
   }
   .withheld.none { background: var(--code); color: var(--muted); font-weight: 400; }
 
   .answer {
-    padding: 12px 14px; border-radius: var(--radius); background: var(--accent-soft);
+    padding: 12px 14px; border-radius: var(--radius-md); background: var(--accent-soft);
     border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-    font-size: 14px; margin-bottom: 12px; white-space: pre-wrap;
+    font-size: var(--fs-lg); margin-bottom: 12px;
+    white-space: pre-wrap; overflow-wrap: break-word;
+    /* Cap the measure: at 1440px a single-principal answer otherwise ran to 154
+       characters per line, roughly double a comfortable reading width. */
+    max-width: 68ch;
   }
-  .answer .usage { color: var(--muted); font-size: 11.5px; margin-top: 8px; }
-  .ungrounded { color: var(--withheld-fg); font-size: 12px; margin-top: 6px; }
+  .answer .usage { color: var(--muted); font-size: var(--fs-xs); margin-top: 8px; }
+  .ungrounded { color: var(--withheld-fg); font-size: var(--fs-xs); margin-top: 6px; }
 
   ol.src { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
-  ol.src li { border: 1px solid var(--border); border-radius: 9px; background: var(--panel); }
+  ol.src li {
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    background: var(--panel); max-width: 78ch;
+  }
   ol.src summary {
     padding: 9px 11px; cursor: pointer; display: flex; gap: 8px; align-items: baseline;
-    font-size: 13px; list-style: none;
+    font-size: var(--fs-sm); list-style: none;
   }
   ol.src summary::-webkit-details-marker { display: none; }
   .n { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 15px; }
-  .sc { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; margin-left: auto; }
+  .lbl { flex: 1; min-width: 0; }
+  .sc { color: var(--muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
   .tag {
-    font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
-    padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+    font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: .05em;
+    font-weight: 700; padding: 2px 6px; border-radius: 4px; white-space: nowrap;
   }
   .tag.public { color: var(--public); background: color-mix(in srgb, var(--public) 14%, transparent); }
   .tag.internal { color: var(--internal); background: color-mix(in srgb, var(--internal) 14%, transparent); }
   .tag.confidential { color: var(--confidential); background: color-mix(in srgb, var(--confidential) 16%, transparent); }
   .tag.restricted { color: var(--restricted); background: color-mix(in srgb, var(--restricted) 16%, transparent); }
-  .body { padding: 0 11px 11px; font-size: 12.5px; color: var(--muted); white-space: pre-wrap; }
-  .body .path { display: block; font-family: ui-monospace, monospace; font-size: 11px; margin-bottom: 7px; }
-  .empty { color: var(--muted); font-size: 13px; padding: 14px; border: 1px dashed var(--border); border-radius: 9px; }
-  .note { color: var(--muted); font-size: 12px; margin-top: 18px; }
+  .body {
+    padding: 0 11px 11px; font-size: var(--fs-md); color: var(--muted);
+    white-space: pre-wrap; overflow-wrap: break-word; max-width: 76ch;
+  }
+  .body .path {
+    display: block; font-family: ui-monospace, monospace; font-size: var(--fs-2xs);
+    margin-bottom: 7px; overflow-wrap: break-word;
+  }
+
+  .empty {
+    color: var(--muted); font-size: var(--fs-sm); padding: 14px; max-width: 62ch;
+    border: 1px dashed var(--border); border-radius: var(--radius-md); text-wrap: pretty;
+  }
+  .empty strong { display: block; color: var(--text); font-size: var(--fs-base); margin-bottom: 4px; }
+  .error {
+    padding: 12px 14px; border-radius: var(--radius-md); max-width: 62ch;
+    background: var(--withheld-bg); color: var(--withheld-fg);
+    border: 1px solid color-mix(in srgb, var(--withheld-fg) 25%, transparent);
+    font-size: var(--fs-sm); text-wrap: pretty;
+  }
+  .error strong { display: block; margin-bottom: 4px; }
+  .error code { font-size: var(--fs-xs); opacity: .85; overflow-wrap: break-word; }
+  .note { color: var(--muted); font-size: var(--fs-xs); margin-top: 18px; max-width: 80ch; text-wrap: pretty; }
 </style>
 </head>
 <body>
 <header>
   <h1>gatekeeper-rag <span>· permission-aware retrieval console</span></h1>
-  <div class="warn" id="banner">
+  <div class="warn">
     <strong>Development authentication.</strong> Signing in below mints a real bearer
     token — verified signature, real expiry — but the endpoint that issues it asks for no
     password, so anyone who can reach this port can sign in as anyone. That is what
@@ -130,16 +221,25 @@
   <aside class="panel">
     <h2 id="whoHeading">Sign in as</h2>
     <div class="who" id="who"></div>
-    <div id="session" class="meta" style="padding:0 14px 12px"></div>
+    <div id="session" class="session"></div>
   </aside>
 
-  <section>
-    <form id="q">
-      <input type="text" id="question" autocomplete="off"
-             placeholder="Ask about expenses, equity, security incidents, parental leave…">
-      <button type="submit" id="go">Ask</button>
+  <section aria-labelledby="resultsHeading">
+    <h2 id="resultsHeading" class="sr-only">Results</h2>
+    <form class="ask" id="q">
+      <label for="question">Ask a question</label>
+      <div class="row">
+        <input type="text" id="question" name="question" autocomplete="off"
+               placeholder="e.g. How much can I expense for a meal?">
+        <button type="submit" id="go">Ask</button>
+      </div>
     </form>
     <div class="examples" id="examples"></div>
+
+    <!-- Rendered before it ever has text, so repeated polite updates announce reliably. -->
+    <p id="status" class="sr-only" role="status"></p>
+    <div id="error" role="alert"></div>
+
     <div id="out"></div>
     <p class="note" id="foot"></p>
   </section>
@@ -157,6 +257,10 @@ const EXAMPLES = [
 const el = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+// Full strings per branch rather than a fragment glued around a number: word order and
+// plural rules differ per language, so "principal(s)" cannot be translated.
+const count = (n, one, many) => n === 1 ? one : many.replace("{n}", n.toLocaleString());
+
 let principals = [];
 let token = sessionStorage.getItem("gk_token") || null;
 let identity = null;
@@ -165,13 +269,22 @@ function authHeaders() {
   return token ? { authorization: `Bearer ${token}` } : {};
 }
 
+function say(message) { el("status").textContent = message; }
+
+function fail(summary, detail) {
+  el("error").innerHTML =
+    `<div class="error"><strong>${esc(summary)}</strong>` +
+    (detail ? `<code>${esc(detail)}</code>` : "") + `</div>`;
+}
+function clearError() { el("error").innerHTML = ""; }
+
 async function signIn(handle) {
   const res = await fetch("/api/dev-login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ handle }),
   });
-  if (!res.ok) throw new Error(`sign-in failed: ${res.status}`);
+  if (!res.ok) throw new Error(`the sign-in endpoint returned ${res.status}`);
   token = (await res.json()).token;
   sessionStorage.setItem("gk_token", token);
   await loadIdentity();
@@ -189,16 +302,15 @@ async function loadIdentity() {
 }
 
 function renderSession() {
-  const el2 = el("session");
-  if (!identity) { el2.textContent = "not signed in"; return; }
+  const box = el("session");
+  if (!identity) { box.textContent = "Not signed in."; return; }
   const until = new Date(identity.expires_at * 1000).toLocaleTimeString();
-  el2.innerHTML =
-    `signed in as <strong>${esc(identity.display_name)}</strong><br>` +
-    `token expires ${until}` +
-    (identity.can_impersonate ? "<br>may impersonate (comparison enabled)" : "") +
-    ` · <a href="#" id="signout">sign out</a>`;
-  el("signout").onclick = (e) => {
-    e.preventDefault();
+  box.innerHTML =
+    `Signed in as <strong>${esc(identity.display_name)}</strong><br>` +
+    `Token expires ${until}` +
+    (identity.can_impersonate ? "<br>May impersonate, so comparison is enabled." : "") +
+    `<br><button type="button" class="linkish" id="signout">Sign out</button>`;
+  el("signout").onclick = () => {
     token = null; identity = null; sessionStorage.removeItem("gk_token");
     boot();
   };
@@ -218,8 +330,8 @@ async function boot() {
       <input type="${kind}" name="who" value="${esc(p.handle)}" ${
         identity && preferred.has(p.handle) ? "checked" : ""}>
       <span class="nm">${esc(p.display_name)}</span>
-      <div class="meta">clearance ${p.clearance} · ${esc(p.groups.join(", ") || "no groups")}</div>
-      <div class="bar"><i data-bar="${esc(p.handle)}" style="width:0"></i></div>
+      <div class="meta">Clearance ${p.clearance} · ${esc(p.groups.join(", ") || "no groups")}</div>
+      <div class="bar" aria-hidden="true"><i data-bar="${esc(p.handle)}" style="width:0"></i></div>
       <div class="meta" data-surface="${esc(p.handle)}">…</div>
     </label>`).join("");
 
@@ -233,8 +345,8 @@ async function boot() {
   if (!identity) {
     el("who").onchange = async (e) => {
       if (e.target.name !== "who") return;
-      try { await signIn(e.target.value); await boot(); }
-      catch (err) { el("out").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+      try { clearError(); await signIn(e.target.value); await boot(); }
+      catch (err) { fail("Could not sign in. Check the console is still running, then try again.", err.message); }
     };
   }
 
@@ -252,8 +364,8 @@ async function boot() {
     const note = document.querySelector(`[data-surface="${s.handle}"]`);
     const bar = document.querySelector(`[data-bar="${s.handle}"]`);
     const r = s.by_sensitivity.restricted;
-    note.textContent = `${s.chunks.toLocaleString()} chunks visible`
-      + (r ? ` · ${r.toLocaleString()} restricted` : "");
+    note.textContent = count(s.chunks, "1 chunk visible", "{n} chunks visible")
+      + (r ? ` · ${count(r, "1 restricted", "{n} restricted")}` : "");
     bar.style.width = `${(s.chunks / peak) * 100}%`;
   });
 }
@@ -263,13 +375,18 @@ function selected() {
 }
 
 function renderSources(sources) {
-  if (!sources.length) return `<div class="empty">No accessible sources.</div>`;
+  if (!sources.length) {
+    return `<div class="empty"><strong>No readable sources matched</strong>
+      Every source this question ranked against sits outside this principal's access, or
+      nothing in the corpus is close enough. Try a broader question, or add a principal
+      with wider access to compare against.</div>`;
+  }
   return `<ol class="src">` + sources.map((s, i) => `
     <li>
       <details>
         <summary>
           <span class="n">${i + 1}</span>
-          <span>${esc(s.label)}</span>
+          <span class="lbl">${esc(s.label)}</span>
           <span class="tag ${esc(s.sensitivity)}">${esc(s.sensitivity)}</span>
           <span class="sc">${s.score.toFixed(3)}</span>
         </summary>
@@ -296,21 +413,32 @@ function render(data) {
   el("out").innerHTML = `<div class="cols">` + data.results.map(r => `
     <div class="col">
       <h3>${esc(r.display_name)}</h3>
-      <div class="sub">clearance ${r.clearance} · ${esc(r.groups.join(", ") || "no groups")} · ${r.latency_ms} ms</div>
+      <div class="sub">Clearance ${r.clearance} · ${esc(r.groups.join(", ") || "no groups")} · ${r.latency_ms} ms</div>
       ${r.expired
         ? `<div class="withheld">${esc(r.expired)} — no claims issued</div>`
         : `<div class="withheld${r.withheld ? "" : " none"}">
-             ${r.withheld ? `${r.withheld} withheld by authorization` : "nothing withheld"}
+             ${r.withheld
+               ? count(r.withheld, "1 result withheld by authorization",
+                                   "{n} results withheld by authorization")
+               : "Nothing withheld"}
            </div>`}
       ${data.results.length > 1 && r.sources.length
-        ? `<div class="sub">${exclusiveCount(r)} of ${r.sources.length} sources unavailable to the other selected principal(s)</div>`
+        ? `<div class="sub">${
+             count(exclusiveCount(r),
+                   `1 of ${r.sources.length} sources is unavailable to the others`,
+                   `{n} of ${r.sources.length} sources are unavailable to the others`)
+           }</div>`
         : ""}
       ${r.answer ? `<div class="answer">${esc(r.answer.text)}
-          ${r.answer.grounded ? "" : `<div class="ungrounded">⚠ the model cited no sources — treat as ungrounded</div>`}
+          ${r.answer.grounded ? "" : `<div class="ungrounded">⚠ The model cited no sources — treat this as ungrounded.</div>`}
           <div class="usage">${esc(r.answer.model)} · ${r.answer.input_tokens.toLocaleString()} in / ${r.answer.output_tokens.toLocaleString()} out</div>
         </div>` : ""}
       ${renderSources(r.sources)}
     </div>`).join("") + `</div>`;
+
+  const total = data.results.reduce((n, r) => n + r.sources.length, 0);
+  say(count(data.results.length, `Answered for 1 principal, ${total} sources.`,
+                                 `Answered for {n} principals, ${total} sources.`));
 
   el("foot").textContent = data.generation_available
     ? `Pipeline: ${data.pipeline} · ${data.embedding_model}. Every result was filtered by the database, not by this page.`
@@ -320,17 +448,21 @@ function render(data) {
 el("q").onsubmit = async (e) => {
   e.preventDefault();
   const question = el("question").value.trim();
-  if (!question) return;
+  if (!question) { el("question").focus(); return; }
+  clearError();
   if (!identity) {
-    el("out").innerHTML = `<div class="empty">Sign in first — pick a principal on the left.</div>`;
+    fail("Sign in before asking a question.", "Choose a principal from the list to sign in.");
     return;
   }
   // The caller's own principal is implied by the token; anything else is impersonation
   // and the server checks the claim rather than trusting this list.
   const impersonate = selected().filter(h => h !== identity.handle);
+  const asking = 1 + impersonate.length;
 
   el("go").disabled = true;
-  el("out").innerHTML = `<div class="empty">Searching as ${1 + impersonate.length} principal(s)…</div>`;
+  say(count(asking, "Searching as 1 principal…", "Searching as {n} principals…"));
+  el("out").innerHTML = `<div class="empty">${
+    count(asking, "Searching as 1 principal…", "Searching as {n} principals…")}</div>`;
   try {
     const res = await fetch("/api/ask", {
       method: "POST",
@@ -340,7 +472,9 @@ el("q").onsubmit = async (e) => {
     if (!res.ok) throw new Error(await res.text());
     render(await res.json());
   } catch (err) {
-    el("out").innerHTML = `<div class="empty">Request failed: ${esc(err.message)}</div>`;
+    el("out").innerHTML = "";
+    say("The request failed.");
+    fail("The request failed. Check the console is still running, then ask again.", err.message);
   } finally {
     el("go").disabled = false;
   }
