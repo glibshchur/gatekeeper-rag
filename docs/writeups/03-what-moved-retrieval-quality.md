@@ -186,6 +186,6 @@ which two is worth more than the 0.05 nDCG the third one bought.
 
 ---
 
-*From [gatekeeper-rag](https://github.com/OWNER/gatekeeper-rag). Reproduce with
+*From [gatekeeper-rag](https://github.com/glibshchur/gatekeeper-rag). Reproduce with
 `make eval`; the generated table is [docs/ABLATION.md](../ABLATION.md) and the decision is
 [ADR 0008](../adr/0008-hybrid-search-measured-and-disabled.md).*

@@ -130,6 +130,6 @@ The performance is real and so is the risk.
 
 ---
 
-*From [gatekeeper-rag](https://github.com/OWNER/gatekeeper-rag). Numbers reproduce with
+*From [gatekeeper-rag](https://github.com/glibshchur/gatekeeper-rag). Numbers reproduce with
 `make bench`; the full record is [ADR 0006](../adr/0006-filtered-ann-and-index-selectivity.md),
 including the parts where it was wrong.*

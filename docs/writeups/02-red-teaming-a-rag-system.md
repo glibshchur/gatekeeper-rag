@@ -142,7 +142,7 @@ transaction-scoped database setting, established before generation and unreachab
 
 ---
 
-*From [gatekeeper-rag](https://github.com/OWNER/gatekeeper-rag). Reproduce with
+*From [gatekeeper-rag](https://github.com/glibshchur/gatekeeper-rag). Reproduce with
 `make injection` and `make redteam-indirect`. Full record:
 [ADR 0010](../adr/0010-injection-detection-is-the-second-line.md) and
 [THREAT_MODEL.md](../THREAT_MODEL.md).*

@@ -161,11 +161,11 @@ ADR [0004](docs/adr/0004-embedding-columns-on-chunks.md).
 
 ADRs [0001](docs/adr/0001-postgres-as-the-only-datastore.md)–[0003](docs/adr/0003-abac-over-rbac.md).
 
-<!-- No git remote is configured yet. Replace OWNER/REPO once one exists. -->
-[Unreleased]: https://github.com/OWNER/gatekeeper-rag/compare/v0.5...HEAD
-[v0.5]: https://github.com/OWNER/gatekeeper-rag/compare/v0.4...v0.5
-[v0.4]: https://github.com/OWNER/gatekeeper-rag/compare/v0.3...v0.4
-[v0.3]: https://github.com/OWNER/gatekeeper-rag/compare/v0.2...v0.3
-[v0.2]: https://github.com/OWNER/gatekeeper-rag/compare/v0.1...v0.2
-[v0.1]: https://github.com/OWNER/gatekeeper-rag/compare/v0.0...v0.1
-[v0.0]: https://github.com/OWNER/gatekeeper-rag/releases/tag/v0.0
+
+[Unreleased]: https://github.com/glibshchur/gatekeeper-rag/compare/v0.5...HEAD
+[v0.5]: https://github.com/glibshchur/gatekeeper-rag/compare/v0.4...v0.5
+[v0.4]: https://github.com/glibshchur/gatekeeper-rag/compare/v0.3...v0.4
+[v0.3]: https://github.com/glibshchur/gatekeeper-rag/compare/v0.2...v0.3
+[v0.2]: https://github.com/glibshchur/gatekeeper-rag/compare/v0.1...v0.2
+[v0.1]: https://github.com/glibshchur/gatekeeper-rag/compare/v0.0...v0.1
+[v0.0]: https://github.com/glibshchur/gatekeeper-rag/releases/tag/v0.0

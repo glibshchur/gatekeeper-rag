@@ -4,7 +4,7 @@ Ready-to-paste text for an Upwork profile, a portfolio page, or a proposal. Writ
 lead with **outcomes and measurements**, not the stack — the stack is commodity, the
 measurements are not.
 
-Replace `github.com/OWNER/gatekeeper-rag` with the real URL, and the video placeholder once
+Replace `github.com/glibshchur/gatekeeper-rag` with the real URL, and the video placeholder once
 recorded ([shot list](DEMO_SCRIPT.md)).
 
 ---
@@ -33,7 +33,7 @@ recorded ([shot list](DEMO_SCRIPT.md)).
 >
 > Everything is reproducible: `docker compose up`, one command, no API keys required.
 >
-> Code, benchmarks and 16 architecture decision records: github.com/OWNER/gatekeeper-rag
+> Code, benchmarks and 16 architecture decision records: github.com/glibshchur/gatekeeper-rag
 
 ## Portfolio project description (long)
 
@@ -96,7 +96,7 @@ recorded ([shot list](DEMO_SCRIPT.md)).
 > prompt injections planted in the live corpus — none of which widened access, including
 > the ones my own classifier failed to detect.
 >
-> Reference implementation with full benchmarks: github.com/OWNER/gatekeeper-rag
+> Reference implementation with full benchmarks: github.com/glibshchur/gatekeeper-rag
 >
 > Happy to walk through the threat model and where it's still weak — it's documented.
 
