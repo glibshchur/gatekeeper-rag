@@ -1,8 +1,6 @@
 __pycache__/
 *.py[cod]
 .venv/
-.env
-.env.local
 *.egg-info/
 dist/
 build/
@@ -15,3 +13,4 @@ htmlcov/
 /var/
 /corpus/sources/
 node_modules/
+config.bat

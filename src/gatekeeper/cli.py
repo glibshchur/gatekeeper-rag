@@ -86,6 +86,23 @@ def corpus_load(
     console.print(table)
 
 
+@principals_app.command("seed")
+def principals_seed() -> None:
+    """Create the tenant and its cast of principals, without loading any documents.
+
+    `corpus load` does this as its first step, but that needs the handbook cloned and
+    takes ~45 minutes to embed. Tests that only need principals to exist — the MCP
+    surface, the indirect-injection suite — were silently depending on someone having
+    run the full load first, which is true locally and false in CI.
+    """
+
+    async def go() -> tuple[int, int]:
+        return await seed.seed_tenant_and_principals()
+
+    tenants, people = _run(go())
+    console.print(f"seeded {tenants} tenant, {people} principals")
+
+
 @principals_app.command("list")
 def principals_list() -> None:
     """Show the seeded cast."""
