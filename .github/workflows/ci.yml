@@ -63,6 +63,12 @@ jobs:
         run: |
           uv run alembic downgrade base
           uv run alembic upgrade head
+      - name: Seed the tenant and its principals
+        # Not the corpus — that needs the handbook cloned and ~45 minutes to embed. Only
+        # the tenant and the seven principals, which is what the MCP and indirect-injection
+        # suites actually require. Without this they fail with "no principal 'wren'", and
+        # they passed locally only because a full `corpus load` had been run by hand.
+        run: uv run gatekeeper principals seed
       - name: Unit tests
         run: uv run pytest tests/unit -q
       - name: RLS and retrieval integration tests
@@ -91,6 +97,7 @@ jobs:
           enable-cache: true
       - run: uv sync --all-extras
       - run: uv run alembic upgrade head
+      - run: uv run gatekeeper principals seed
       - name: Access model — oracle vs database, RLS, ABAC, audit chain, pipeline arms
         run: |
           uv run pytest -q \
@@ -100,7 +107,7 @@ jobs:
             tests/integration/test_rls.py \
             tests/integration/test_abac.py \
             tests/integration/test_audit_chain.py \
-            tests/integration/test_pipeline.py \\
+            tests/integration/test_pipeline.py \
             tests/unit/test_injection.py
       - name: Note
         run: |
